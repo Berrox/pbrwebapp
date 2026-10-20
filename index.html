@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sampler</title>
+</head>
+<body>
+  <header id="topbar">
+    <button id="stopAll" type="button">STOP ALL</button>
+    <label class="mode"><input type="checkbox" id="editMode" /> Bearbeiten</label>
+    <span id="modeLabel">LIVE</span>
+    <span id="status"></span>
+  </header>
+  <nav id="bankbar">
+    <div id="tabs"></div>
+    <div id="bankTools" hidden>
+      <button id="bAdd" type="button">+ Bank</button>
+      <button id="bRename" type="button">Umbenennen</button>
+      <button id="bLeft" type="button" aria-label="Bank nach links">◀</button>
+      <button id="bRight" type="button" aria-label="Bank nach rechts">▶</button>
+      <button id="bDel" type="button">Löschen</button>
+      <label>Spalten <input id="bCols" type="number" min="1" max="8" /></label>
+      <label>Pads <input id="bCount" type="number" min="1" max="48" /></label>
+    </div>
+  </nav>
+  <main id="grid"></main>
+  <dialog id="padDialog">
+    <form method="dialog" id="padForm">
+      <h2>Pad bearbeiten</h2>
+      <label>Name <input id="fName" maxlength="30" /></label>
+      <label>Farbe <input id="fColor" type="color" /></label>
+      <label>Lautstärke <input id="fVol" type="range" min="0" max="1" step="0.01" /></label>
+      <label><input id="fLoop" type="checkbox" /> Loop</label>
+      <label>Audiodatei (WAV/MP3) <input id="fFile" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" /></label>
+      <p id="fSound"></p>
+      <div class="row">
+        <button value="clear" type="submit">Pad leeren</button>
+        <button value="cancel" type="submit">Abbrechen</button>
+        <button value="ok" type="submit" id="fOk">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

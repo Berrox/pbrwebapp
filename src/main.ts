@@ -1,0 +1,185 @@
+import "./styles/theme.css";
+import { AudioEngine } from "./audio/AudioEngine";
+import {
+  deleteBankData, deletePad, getSound, importSound, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
+} from "./storage/db";
+import { clampInt, makePads, migrateLegacy, moveBank, newBank, padPrefix, type Bank } from "./model/banks";
+
+const engine = new AudioEngine();
+const buffers = new Map<string, AudioBuffer>(); // dekodierte Sounds, nur einmal dekodiert
+const store = new Map<string, PadConfig>(); // alle Pads aller Bänke
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const grid = $("grid"), tabs = $("tabs"), status = $("status"), dialog = $<HTMLDialogElement>("padDialog");
+
+let banks: Bank[] = [];
+let current = 0;
+let editMode = false;
+let editing: PadConfig | null = null;
+
+const cur = (): Bank => banks[current];
+function say(msg: string): void { status.textContent = msg; }
+
+async function persistBanks(): Promise<void> {
+  try { await saveBanks(banks); } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
+}
+
+async function bufferFor(soundId: string): Promise<AudioBuffer | null> {
+  const cached = buffers.get(soundId);
+  if (cached) return cached;
+  const s = await getSound(soundId);
+  if (!s) return null;
+  try {
+    const buf = await engine.decode(await s.blob.arrayBuffer());
+    buffers.set(soundId, buf);
+    return buf;
+  } catch { return null; }
+}
+
+function renderTabs(): void {
+  tabs.replaceChildren();
+  const playing = engine.playingIds();
+  banks.forEach((b, i) => {
+    const t = document.createElement("button");
+    t.type = "button";
+    t.className = "tab" + (i === current ? " active" : "");
+    const running = playing.some((id) => id.startsWith(padPrefix(b.id)));
+    t.textContent = (running ? "● " : "") + b.name; // textContent: kein HTML aus Namen
+    t.addEventListener("pointerdown", (e) => { e.preventDefault(); current = i; render(); }); // stoppt nichts
+    tabs.append(t);
+  });
+  $<HTMLInputElement>("bCols").value = String(cur().columns);
+  $<HTMLInputElement>("bCount").value = String(cur().padCount);
+}
+
+function renderGrid(): void {
+  grid.replaceChildren();
+  grid.style.gridTemplateColumns = `repeat(${cur().columns}, 1fr)`;
+  for (const p of makePads(cur(), store)) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pad" + (p.soundId ? "" : " empty") + (engine.isPlaying(p.id) ? " playing" : "");
+    b.style.background = p.color;
+    b.textContent = p.name || (editMode ? "+ leer" : "");
+    b.addEventListener("pointerdown", (e) => { e.preventDefault(); void onPad(p); });
+    grid.append(b);
+  }
+}
+function render(): void { renderTabs(); renderGrid(); }
+
+async function onPad(p: PadConfig): Promise<void> {
+  await engine.unlock();
+  if (editMode) { openDialog(p); return; }
+  if (!p.soundId) return; // leere Pads: keine Reaktion, keine Fehlermeldung
+  if (engine.isPlaying(p.id)) { engine.stop(p.id); return; }
+  const buf = await bufferFor(p.soundId);
+  if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
+  engine.play(p.id, buf, { volume: p.volume, loop: p.loop });
+}
+
+function openDialog(p: PadConfig): void {
+  editing = p;
+  $<HTMLInputElement>("fName").value = p.name;
+  $<HTMLInputElement>("fColor").value = p.color;
+  $<HTMLInputElement>("fVol").value = String(p.volume);
+  $<HTMLInputElement>("fLoop").checked = p.loop;
+  $<HTMLInputElement>("fFile").value = "";
+  $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
+  dialog.showModal();
+}
+
+dialog.addEventListener("close", async () => {
+  const p = editing; editing = null;
+  if (!p) return;
+  const action = dialog.returnValue;
+  if (action === "clear") {
+    engine.stop(p.id);
+    Object.assign(p, { name: "", soundId: null });
+  } else if (action === "ok") {
+    p.name = $<HTMLInputElement>("fName").value.trim();
+    p.color = $<HTMLInputElement>("fColor").value;
+    p.volume = Number($<HTMLInputElement>("fVol").value);
+    p.loop = $<HTMLInputElement>("fLoop").checked;
+    const file = $<HTMLInputElement>("fFile").files?.[0];
+    if (file) {
+      try {
+        const data = await file.arrayBuffer();
+        await engine.decode(data.slice(0)); // Prüfung: Datei muss dekodierbar sein
+        p.soundId = await importSound(file, data);
+        if (!p.name) p.name = file.name.replace(/\.[^.]+$/, "");
+      } catch {
+        say("Diese Datei kann nicht gelesen werden. Bitte WAV oder MP3 verwenden.");
+      }
+    }
+  } else { render(); return; }
+  try { await savePad(p); say("Gespeichert."); }
+  catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
+  render();
+});
+
+// ---- Bank-Werkzeuge (nur im Bearbeitungsmodus sichtbar) ----
+$("bAdd").addEventListener("click", async () => {
+  const name = prompt("Name der neuen Bank:")?.trim();
+  if (!name) return;
+  banks.push(newBank(name)); current = banks.length - 1;
+  await persistBanks(); render();
+});
+$("bRename").addEventListener("click", async () => {
+  const name = prompt("Neuer Name der Bank:", cur().name)?.trim();
+  if (!name) return;
+  cur().name = name; await persistBanks(); render();
+});
+for (const [id, dir] of [["bLeft", -1], ["bRight", 1]] as const) {
+  $(id).addEventListener("click", async () => {
+    const r = moveBank(banks, current, dir);
+    banks = r.banks; current = r.index;
+    await persistBanks(); render();
+  });
+}
+$("bDel").addEventListener("click", async () => {
+  if (banks.length <= 1) { say("Die letzte Bank kann nicht gelöscht werden."); return; }
+  const b = cur();
+  if (!confirm(`Bank „${b.name}“ mit allen Pad-Einstellungen wirklich löschen?`)) return;
+  for (const id of [...store.keys()]) {
+    if (id.startsWith(padPrefix(b.id))) { engine.stop(id); store.delete(id); }
+  }
+  try { await deleteBankData(b.id); } catch { say("Löschen fehlgeschlagen."); return; }
+  banks.splice(current, 1);
+  current = Math.min(current, banks.length - 1);
+  await persistBanks(); render();
+});
+$<HTMLInputElement>("bCols").addEventListener("change", async (e) => {
+  cur().columns = clampInt(Number((e.target as HTMLInputElement).value), 1, 8, cur().columns);
+  await persistBanks(); render();
+});
+$<HTMLInputElement>("bCount").addEventListener("change", async (e) => {
+  cur().padCount = clampInt(Number((e.target as HTMLInputElement).value), 1, 48, cur().padCount);
+  await persistBanks(); render(); // Pads über dem neuen Limit behalten ihre Einstellungen
+});
+
+$("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
+$<HTMLInputElement>("editMode").addEventListener("change", (e) => {
+  editMode = (e.target as HTMLInputElement).checked;
+  $("modeLabel").textContent = editMode ? "BEARBEITEN" : "LIVE";
+  $("modeLabel").classList.toggle("edit", editMode);
+  $("bankTools").hidden = !editMode;
+  render();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.open) engine.stopAll(); });
+engine.onChange(render);
+
+async function start(): Promise<void> {
+  const savedPads = await loadPads();
+  banks = await loadBanks();
+  if (!banks.length) {
+    banks = [{ id: "bank-1", name: "Bank 1", columns: 4, padCount: 12 }];
+    await saveBanks(banks);
+  }
+  for (const p of savedPads) store.set(p.id, p);
+  for (const { oldId, pad } of migrateLegacy(savedPads, banks[0].id)) { // Übernahme aus M1
+    store.delete(oldId); store.set(pad.id, pad);
+    await savePad(pad); await deletePad(oldId);
+  }
+  render();
+  say("Bereit. Zum Belegen „Bearbeiten“ einschalten und ein Pad antippen.");
+}
+void start();

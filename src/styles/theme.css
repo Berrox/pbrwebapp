@@ -1,0 +1,52 @@
+:root {
+  --bg: #121316; --panel: #1d1f24; --text: #f2f3f5; --muted: #9aa0aa;
+  --stop: #d93025; --accent: #3b82f6; --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text); font-family: system-ui, sans-serif;
+  display: flex; flex-direction: column; -webkit-user-select: none; user-select: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+#topbar { display: flex; align-items: center; gap: 16px; padding: 10px; background: var(--panel); }
+#stopAll {
+  background: var(--stop); color: #fff; border: 0; border-radius: var(--radius);
+  font-size: 1.6rem; font-weight: 800; padding: 16px 36px; min-height: 64px; cursor: pointer;
+}
+#stopAll:focus-visible, .pad:focus-visible { outline: 4px solid #fff; outline-offset: 2px; }
+.mode { font-size: 1.1rem; display: flex; gap: 8px; align-items: center; }
+.mode input { width: 24px; height: 24px; }
+#modeLabel { font-weight: 700; padding: 6px 12px; border-radius: 8px; background: #14532d; }
+#modeLabel.edit { background: #92400e; }
+#status { color: var(--muted); margin-left: auto; }
+#grid {
+  flex: 1; display: grid; gap: 10px; padding: 10px;
+  grid-template-columns: repeat(4, 1fr); grid-auto-rows: 1fr; min-height: 0;
+}
+@media (max-width: 700px) { #grid { grid-template-columns: repeat(2, 1fr); } }
+.pad {
+  border: 3px solid transparent; border-radius: var(--radius); color: #fff;
+  font-size: 1.3rem; font-weight: 700; text-shadow: 0 1px 3px #000a; cursor: pointer;
+  min-height: 80px; touch-action: manipulation; word-break: break-word;
+}
+.pad.empty { background: var(--panel) !important; color: var(--muted); text-shadow: none; cursor: default; }
+.pad.playing { border-color: #fff; box-shadow: 0 0 0 4px #ffffff66 inset; }
+.pad.playing::before { content: "▶ "; }
+dialog { background: var(--panel); color: var(--text); border: 0; border-radius: var(--radius); padding: 20px; min-width: min(420px, 92vw); }
+dialog::backdrop { background: #000a; }
+dialog label { display: block; margin: 12px 0; }
+dialog input:not([type=checkbox]):not([type=range]) { width: 100%; padding: 8px; font-size: 1rem; }
+.row { display: flex; gap: 8px; justify-content: flex-end; }
+.row button { padding: 12px 18px; font-size: 1rem; border-radius: 10px; border: 0; cursor: pointer; }
+#fOk { background: var(--accent); color: #fff; }
+#bankbar { padding: 8px 10px 0; display: flex; flex-direction: column; gap: 8px; }
+#tabs { display: flex; gap: 8px; overflow-x: auto; }
+.tab, #bankTools button {
+  background: var(--panel); color: var(--text); border: 2px solid #343741; border-radius: 10px;
+  padding: 12px 18px; font-size: 1.1rem; min-height: 48px; cursor: pointer; white-space: nowrap;
+}
+.tab.active { background: var(--accent); border-color: var(--accent); font-weight: 700; }
+#bankTools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#bankTools[hidden] { display: none; }
+#bankTools input { width: 70px; padding: 8px; font-size: 1rem; }

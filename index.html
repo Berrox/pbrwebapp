@@ -16,6 +16,7 @@
   <header id="topbar">
     <button id="stopAll" type="button">STOP ALL</button>
     <button id="modeBtn" type="button" class="edit">Modus</button>
+    <button id="notesBtn" type="button" class="tab" aria-pressed="false">📝 Notizen</button>
     <span id="offlineState"></span>
     <span id="midiState"></span>
     <span id="status"></span>
@@ -38,7 +39,13 @@
       <input id="pFile" type="file" accept=".zip,application/zip" hidden />
     </div>
   </nav>
-  <main id="grid"></main>
+  <div id="work">
+    <main id="grid"></main>
+    <aside id="notes" hidden aria-label="Notizen">
+      <div class="notesHead"><b>Notizen</b><span id="notesStatus" role="status"></span><button id="noteAdd" type="button" class="tab">+ Notiz</button></div>
+      <div id="notesList"></div>
+    </aside>
+  </div>
   <dialog id="padDialog">
     <form method="dialog" id="padForm">
       <h2>Pad bearbeiten</h2>

@@ -7,7 +7,8 @@ class MockSource {
   buffer: unknown = null; loop = false; stopped = false; started = false;
   onended: (() => void) | null = null;
   connect(n: unknown) { return n; } disconnect() {}
-  start() { this.started = true; }
+  startArgs: unknown[] = []; loopStart = 0; loopEnd = 0;
+  start(...a: unknown[]) { this.started = true; this.startArgs = a; }
   stop() { this.stopped = true; }
   end() { this.onended?.(); } // simuliert das natürliche Ende
 }
@@ -75,5 +76,33 @@ describe("AudioEngine", () => {
   it("Stopp eines nicht laufenden Pads ist harmlos", () => {
     expect(() => engine.stop("x")).not.toThrow();
     expect(() => engine.stopAll()).not.toThrow();
+  });
+  describe("Schnittpunkte", () => {
+    const buf10 = { duration: 10 } as AudioBuffer;
+    it("One-Shot spielt nur den Ausschnitt", () => {
+      engine.play("a", buf10, { volume: 1, loop: false, start: 2, end: 5 });
+      expect(sources[0].startArgs).toEqual([0, 2, 3]);
+    });
+    it("Loop läuft nur zwischen Start und Ende", () => {
+      engine.play("a", buf10, { volume: 1, loop: true, start: 2, end: 5 });
+      expect(sources[0].loop).toBe(true);
+      expect([sources[0].loopStart, sources[0].loopEnd]).toEqual([2, 5]);
+      expect(sources[0].startArgs).toEqual([0, 2]);
+    });
+    it("vertauschte und ungültige Grenzen werden korrigiert", () => {
+      engine.play("a", buf10, { volume: 1, loop: false, start: 8, end: 3 });
+      engine.play("b", buf10, { volume: 1, loop: false, start: -5, end: 99 });
+      expect(sources[0].startArgs).toEqual([0, 3, 5]);
+      expect(sources[1].startArgs).toEqual([0, 0, 10]);
+    });
+    it("ohne Schnitt läuft das ganze Sample", () => {
+      engine.play("a", buf10, { volume: 1, loop: false });
+      expect(sources[0].startArgs).toEqual([]);
+    });
+    it("STOP ALL beendet auch die Editor-Vorschau", () => {
+      engine.play("__preview__", buf10, { volume: 1, loop: false, start: 1, end: 2 });
+      engine.stopAll();
+      expect(engine.isPlaying("__preview__")).toBe(false);
+    });
   });
 });

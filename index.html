@@ -17,6 +17,10 @@
     <button id="stopAll" type="button">STOP ALL</button>
     <button id="modeBtn" type="button" class="edit">Modus</button>
     <button id="notesBtn" type="button" class="tab" aria-pressed="false">📝 Notizen</button>
+    <button id="wakeBtn" type="button" class="tab" aria-pressed="false">☀ Wach: AUS</button>
+    <label class="master" title="Master-Lautstärke (alle Pads)">🔊 <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Master-Lautstärke in Prozent" /><output id="masterPct" for="masterVol">100 %</output></label>
+    <span id="clock" aria-label="Uhrzeit">--:--:--</span>
+    <span class="sw"><button id="swToggle" type="button" class="tab">⏱ 00:00 ▶</button><button id="swReset" type="button" class="tab" aria-label="Stoppuhr zurücksetzen" disabled>↺</button></span>
     <span id="offlineState"></span>
     <span id="midiState"></span>
     <span id="status"></span>
@@ -54,6 +58,9 @@
       <label>Farbe <input id="fColor" type="color" /></label>
       <label>Lautstärke <span class="volRow"><input id="fVol" type="range" min="0" max="1" step="0.01" aria-label="Lautstärke in Prozent" /><output id="fVolPct" for="fVol">90 %</output></span></label>
       <label><input id="fLoop" type="checkbox" /> Loop</label>
+      <label>Einblenden <span class="volRow"><input id="fFadeIn" type="range" min="0" max="10" step="0.1" aria-label="Einblendzeit in Sekunden" /><output id="fFadeInOut">aus</output></span></label>
+      <label>Ausblenden <span class="volRow"><input id="fFadeOut" type="range" min="0" max="10" step="0.1" aria-label="Ausblendzeit in Sekunden" /><output id="fFadeOutOut">aus</output></span></label>
+      <p class="hint">Ausblenden gilt beim Stoppen des Pads, bei Stop-Regeln und bei One-Shots am Ende. STOP ALL stoppt immer sofort.</p>
       <p class="learn">Taste: <b id="fKeyLabel">–</b>
         <button type="button" id="fKeyLearn" class="tab">Taste wählen</button>
         <button type="button" id="fKeyClear" class="tab" aria-label="Taste entfernen">✕</button></p>
@@ -61,6 +68,12 @@
         <button type="button" id="fMidiLearn" class="tab">MIDI lernen</button>
         <button type="button" id="fMidiClear" class="tab" aria-label="MIDI-Note entfernen">✕</button></p>
       <div id="fNoteRow" hidden><label>Notiz zu diesem Pad <textarea id="fNote" rows="3" maxlength="500" placeholder="z. B. nur zusammen mit Pad 3 verwenden"></textarea></label></div>
+      <fieldset class="behavior">
+        <legend>Kopieren / Tauschen</legend>
+        <label>Ziel-Pad <select id="fOpTarget"></select></label>
+        <div class="row wrap"><button type="button" id="fCopy">Dieses Pad dorthin kopieren</button><button type="button" id="fSwap">Mit Ziel tauschen</button></div>
+        <p class="hint">Wirkt sofort und schließt den Dialog; ungespeicherte Eingaben hier gehen verloren. Betroffene Pads werden gestoppt. Tasten und MIDI-Noten bleiben an ihrer Position.</p>
+      </fieldset>
       <fieldset class="behavior">
         <legend>Wiedergabeverhalten</legend>
         <label>Beim Start

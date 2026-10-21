@@ -2,13 +2,14 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import type { PadConfig } from "../storage/db";
 import { padId, type Bank } from "./banks";
+import { isAssignableKey } from "./keys";
 
 export const FORMAT_NAME = "sampler-project";
 export const FORMAT_VERSION = 1;
 const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
-export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number }
+export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number }
 export interface BankEntry { id: string; name: string; columns: number; padCount: number; pads: PadEntry[] }
 export interface SoundEntry { id: string; name: string; file: string }
 export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[] }
@@ -57,6 +58,12 @@ export function validateProject(raw: unknown): ProjectFile {
       };
       if (p.start !== undefined) out.start = num(p.start, 0, 86400, "ein Startpunkt");
       if (p.end !== undefined) out.end = num(p.end, 0, 86400, "ein Endpunkt");
+      if (p.key !== undefined) {
+        const k = str(p.key, 12, "eine Taste");
+        if (!isAssignableKey(k)) fail("Das Projekt ist beschädigt: Taste ungültig.");
+        out.key = k;
+      }
+      if (p.midiNote !== undefined) out.midiNote = num(p.midiNote, 0, 127, "eine MIDI-Note", true);
       return out;
     });
     return { id, name: str(b.name, 60, "ein Bank-Name"), columns: num(b.columns, 1, 8, "die Spaltenzahl", true), padCount, pads };
@@ -87,7 +94,7 @@ export function buildProjectZip(
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount,
       pads: Array.from({ length: b.padCount }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
         .filter((x): x is { i: number; p: PadConfig } => !!x.p)
-        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end })),
+        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote })),
     })),
   };
   const files: Zippable = { "project.json": strToU8(JSON.stringify(project, null, 2)) };
@@ -137,7 +144,7 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
     for (const p of b.pads) {
       let soundId = p.soundId;
       if (soundId && !parsed.audio.has(soundId)) { warnings.push(`„${p.name || "Pad"}“: Audiodatei fehlt`); soundId = null; }
-      pads.push({ id: padId(b.id, p.index), name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end });
+      pads.push({ id: padId(b.id, p.index), name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote });
     }
     return { id: b.id, name: b.name, columns: b.columns, padCount: b.padCount };
   });

@@ -4,6 +4,8 @@ import {
   deleteBankData, deletePad, getSound, importSound, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
+import { findConflict, isAssignableKey, keyLabel } from "./model/keys";
+import { midiSupported, noteName, startMidi } from "./input/midi";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
@@ -21,6 +23,9 @@ let banks: Bank[] = [];
 let current = 0;
 let editMode = false;
 let editing: PadConfig | null = null;
+let learning: "key" | "midi" | null = null; // wartet gerade auf Tastendruck bzw. MIDI-Note
+let pendingKey: string | undefined;
+let pendingMidi: number | undefined;
 
 const cur = (): Bank => banks[current];
 function say(msg: string): void { status.textContent = msg; }
@@ -66,6 +71,8 @@ function renderGrid(): void {
     b.className = "pad" + (p.soundId ? "" : " empty") + (engine.isPlaying(p.id) ? " playing" : "");
     b.style.background = p.color;
     b.textContent = p.name || (editMode ? "+ leer" : "");
+    const hint = [p.key ? `[${keyLabel(p.key)}]` : "", p.midiNote !== undefined ? `♪${noteName(p.midiNote)}` : ""].filter(Boolean).join(" ");
+    if (hint && p.soundId) { const s = document.createElement("small"); s.textContent = hint; b.append(s); }
     b.addEventListener("pointerdown", (e) => { e.preventDefault(); void onPad(p); });
     grid.append(b);
   }
@@ -83,6 +90,12 @@ async function onPad(p: PadConfig): Promise<void> {
   engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
 }
 
+function refreshLearn(): void {
+  $("fKeyLabel").textContent = learning === "key" ? "Taste drücken …" : pendingKey ? keyLabel(pendingKey) : "–";
+  $("fMidiLabel").textContent = learning === "midi" ? "Note spielen …"
+    : pendingMidi !== undefined ? `Note ${pendingMidi} (${noteName(pendingMidi)})` : "–";
+}
+
 function openDialog(p: PadConfig): void {
   editing = p;
   $<HTMLInputElement>("fName").value = p.name;
@@ -90,6 +103,7 @@ function openDialog(p: PadConfig): void {
   $<HTMLInputElement>("fVol").value = String(p.volume);
   $<HTMLInputElement>("fLoop").checked = p.loop;
   $<HTMLInputElement>("fFile").value = "";
+  pendingKey = p.key; pendingMidi = p.midiNote; learning = null; refreshLearn();
   $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
   dialog.showModal();
 }
@@ -97,15 +111,23 @@ function openDialog(p: PadConfig): void {
 dialog.addEventListener("close", async () => {
   const p = editing; editing = null;
   if (!p) return;
+  learning = null;
   const action = dialog.returnValue;
+  let conflictMsg = "";
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
     p.volume = Number($<HTMLInputElement>("fVol").value);
     p.loop = $<HTMLInputElement>("fLoop").checked;
+    const pads = makePads(cur(), store);
+    const kc = findConflict(pads, p.id, "key", pendingKey), mc = findConflict(pads, p.id, "midiNote", pendingMidi);
+    if (kc) conflictMsg += `Taste ${keyLabel(pendingKey!)} ist schon an „${kc.name || "Pad"}“ vergeben und wurde nicht übernommen. `;
+    else p.key = pendingKey;
+    if (mc) conflictMsg += `MIDI-Note ${pendingMidi} ist schon an „${mc.name || "Pad"}“ vergeben und wurde nicht übernommen.`;
+    else p.midiNote = pendingMidi;
     const file = $<HTMLInputElement>("fFile").files?.[0];
     if (file) {
       try {
@@ -119,7 +141,7 @@ dialog.addEventListener("close", async () => {
       }
     }
   } else { render(); return; }
-  try { await savePad(p); say("Gespeichert."); }
+  try { await savePad(p); say(conflictMsg || "Gespeichert."); }
   catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
   render();
 });
@@ -242,7 +264,45 @@ modeBtn.addEventListener("click", () => {
 });
 unlockDialog.addEventListener("close", () => { if (unlockDialog.returnValue === "ok") setMode(true); });
 document.addEventListener("contextmenu", (e) => { if (!editMode) e.preventDefault(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.open) engine.stopAll(); });
+const anyDialogOpen = (): boolean => !!document.querySelector("dialog[open]");
+document.addEventListener("keydown", (e) => {
+  if (learning === "key") { // Taste für ein Pad aufnehmen
+    e.preventDefault(); e.stopPropagation();
+    if (e.code === "Escape") learning = null;
+    else if (!isAssignableKey(e.code)) { say("Diese Taste ist nicht erlaubt. Erlaubt: Buchstaben, Ziffern, Ziffernblock."); return; }
+    else { pendingKey = e.code; learning = null; }
+    refreshLearn(); return;
+  }
+  if (e.key === "Escape" && !anyDialogOpen()) { engine.stopAll(); return; }
+  if (editMode || anyDialogOpen() || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  const tag = (e.target as HTMLElement).tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") return;
+  const p = makePads(cur(), store).find((x) => x.key === e.code); // gilt für die aktuell gewählte Bank
+  if (p) { e.preventDefault(); void onPad(p); }
+}, true);
+
+let midiStarted = false;
+async function ensureMidi(): Promise<void> {
+  if (midiStarted) return;
+  const r = await startMidi(onMidiNote);
+  midiStarted = r.ok; $("midiState").textContent = r.text;
+  if (!r.ok) say(r.text);
+}
+function onMidiNote(note: number): void {
+  if (learning === "midi") { pendingMidi = note; learning = null; refreshLearn(); return; }
+  if (editMode || anyDialogOpen()) return; // MIDI löst nur im Live-Modus Pads aus
+  const p = makePads(cur(), store).find((x) => x.midiNote === note);
+  if (p) void onPad(p);
+}
+$("fKeyLearn").addEventListener("click", () => { learning = "key"; refreshLearn(); });
+$("fKeyClear").addEventListener("click", () => { pendingKey = undefined; learning = null; refreshLearn(); });
+$("fMidiClear").addEventListener("click", () => { pendingMidi = undefined; learning = null; refreshLearn(); });
+$("fMidiLearn").addEventListener("click", async () => {
+  if (!midiSupported()) { say("MIDI wird von diesem Browser nicht unterstützt (zum Beispiel Safari/iPad). Am PC mit Chrome oder Edge möglich."); return; }
+  learning = "midi"; refreshLearn();
+  await ensureMidi();
+  if (!midiStarted) { learning = null; refreshLearn(); }
+});
 engine.onChange(render);
 
 async function start(): Promise<void> {
@@ -263,5 +323,7 @@ async function start(): Promise<void> {
   setMode(saved !== "live"); // nach einem Neuladen im Live-Modus bleibt die Sperre aktiv
   say(editMode ? "Bereit. Pad antippen zum Belegen." : "Bereit. LIVE-Modus.");
   void setupOffline($("offlineState"));
+  $("midiState").textContent = midiSupported() ? "MIDI aus" : "MIDI nicht verfügbar in diesem Browser";
+  if (midiSupported() && [...store.values()].some((p) => p.midiNote !== undefined)) void ensureMidi();
 }
 void start();

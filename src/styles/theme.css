@@ -63,3 +63,6 @@ dialog input:not([type=checkbox]):not([type=range]) { width: 100%; padding: 8px;
 #modeBtn.edit { background: #92400e; }
 #modeBtn.live { background: #14532d; }
 #offlineState { color: var(--muted); font-size: 0.85rem; }
+.pad small { display: block; font-size: 0.8rem; font-weight: 400; opacity: 0.9; }
+.learn { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#midiState { color: var(--muted); font-size: 0.85rem; }

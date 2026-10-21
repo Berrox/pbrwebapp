@@ -25,3 +25,6 @@ Ein Projekt ist eine ZIP-Datei:
 - Fehlende Audiodatei: Pad wird leer importiert, die App meldet es.
 - Das alte Projekt wird erst ersetzt, wenn alle neuen Daten bereit sind (eine Transaktion).
 - Audiodateien werden beim Import nicht dekodiert; eine defekte Datei fällt erst beim Abspielen auf („defekt“-Meldung).
+
+## Nachtrag (M6)
+Pads können zusätzlich `"key"` (Tastencode, z. B. `KeyQ`) und `"midiNote"` (0–127) enthalten. Beide sind optional, die Formatversion bleibt 1. Ältere App-Versionen ignorieren die Felder.

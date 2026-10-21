@@ -5,6 +5,7 @@ export interface StoredSound { id: string; name: string; hash: string; size: num
 export interface PadConfig {
   id: string; name: string; color: string; volume: number; loop: boolean; soundId: string | null;
   start?: number; end?: number; // Schnitt in Sekunden (nicht destruktiv); leer = ganzes Sample
+  key?: string; midiNote?: number; // Tastaturkürzel (event.code) und MIDI-Note, optional
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
 interface SamplerDB extends DBSchema {

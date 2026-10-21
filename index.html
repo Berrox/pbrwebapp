@@ -34,6 +34,7 @@
     </div>
     <div id="projectTools" hidden>
       <button id="pExport" type="button" class="tab">Projekt exportieren (ZIP)</button>
+      <button id="pGroups" type="button" class="tab">Gruppen</button>
       <button id="pLibrary" type="button" class="tab">Soundbibliothek</button>
       <button id="pImport" type="button" class="tab">Projekt importieren …</button>
       <input id="pFile" type="file" accept=".zip,application/zip" hidden />
@@ -51,7 +52,7 @@
       <h2>Pad bearbeiten</h2>
       <label>Name <input id="fName" maxlength="30" /></label>
       <label>Farbe <input id="fColor" type="color" /></label>
-      <label>Lautstärke <input id="fVol" type="range" min="0" max="1" step="0.01" /></label>
+      <label>Lautstärke <span class="volRow"><input id="fVol" type="range" min="0" max="1" step="0.01" aria-label="Lautstärke in Prozent" /><output id="fVolPct" for="fVol">90 %</output></span></label>
       <label><input id="fLoop" type="checkbox" /> Loop</label>
       <p class="learn">Taste: <b id="fKeyLabel">–</b>
         <button type="button" id="fKeyLearn" class="tab">Taste wählen</button>
@@ -59,6 +60,20 @@
       <p class="learn">MIDI: <b id="fMidiLabel">–</b>
         <button type="button" id="fMidiLearn" class="tab">MIDI lernen</button>
         <button type="button" id="fMidiClear" class="tab" aria-label="MIDI-Note entfernen">✕</button></p>
+      <div id="fNoteRow" hidden><label>Notiz zu diesem Pad <textarea id="fNote" rows="3" maxlength="500" placeholder="z. B. nur zusammen mit Pad 3 verwenden"></textarea></label></div>
+      <fieldset class="behavior">
+        <legend>Wiedergabeverhalten</legend>
+        <label>Beim Start
+          <select id="fMode">
+            <option value="parallel">Parallel abspielen</option>
+            <option value="stopSelected">Ausgewählte Pads stoppen</option>
+            <option value="group">Gruppe exklusiv abspielen</option>
+            <option value="stopOthers">Alle anderen Pads stoppen</option>
+          </select></label>
+        <p id="fModeHelp" class="hint"></p>
+        <label>Wiedergabegruppe <select id="fGroup"></select></label>
+        <div id="fTargetsRow"><b>Diese Pads stoppen:</b><div id="fTargets"></div></div>
+      </fieldset>
       <label>Audiodatei (WAV/MP3) <input id="fFile" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" /></label>
       <label>Oder Sound aus der Bibliothek <select id="fLibrary"><option value="">– keine Änderung –</option></select></label>
       <p id="fSound"></p>
@@ -69,6 +84,15 @@
         <button value="ok" type="submit" id="fOk">Speichern</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="groupDialog">
+    <h2>Wiedergabegruppen</h2>
+    <p class="hint">Pads einer Gruppe stoppen sich gegenseitig, wenn sie auf „Gruppe exklusiv abspielen“ stehen. Die Zuordnung der Pads erfolgt im Pad-Dialog. Beim Löschen oder Umbenennen einer Gruppe wird nichts gestoppt.</p>
+    <div id="groupList"></div>
+    <div class="row wrap">
+      <button type="button" id="groupAdd">+ Gruppe</button>
+      <button type="button" id="groupClose">Schließen</button>
+    </div>
   </dialog>
   <dialog id="libraryDialog">
     <h2>Soundbibliothek</h2>

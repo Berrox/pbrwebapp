@@ -23,6 +23,11 @@
       <label>Spalten <input id="bCols" type="number" min="1" max="8" /></label>
       <label>Pads <input id="bCount" type="number" min="1" max="48" /></label>
     </div>
+    <div id="projectTools" hidden>
+      <button id="pExport" type="button" class="tab">Projekt exportieren (ZIP)</button>
+      <button id="pImport" type="button" class="tab">Projekt importieren …</button>
+      <input id="pFile" type="file" accept=".zip,application/zip" hidden />
+    </div>
   </nav>
   <main id="grid"></main>
   <dialog id="padDialog">
@@ -34,12 +39,29 @@
       <label><input id="fLoop" type="checkbox" /> Loop</label>
       <label>Audiodatei (WAV/MP3) <input id="fFile" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" /></label>
       <p id="fSound"></p>
+      <p><button type="button" id="fEdit" class="tab">Wellenform / Schnitt …</button></p>
       <div class="row">
         <button value="clear" type="submit">Pad leeren</button>
         <button value="cancel" type="submit">Abbrechen</button>
         <button value="ok" type="submit" id="fOk">Speichern</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="editorDialog">
+    <h2>Sample schneiden</h2>
+    <canvas id="wave"></canvas>
+    <p id="waveInfo"></p>
+    <p class="hint">Start- und Endlinie mit Maus oder Finger ziehen. Die Originaldatei bleibt unverändert.</p>
+    <div class="row wrap">
+      <button type="button" id="eAll">Ganzes Sample hören</button>
+      <button type="button" id="eSel">Ausschnitt hören</button>
+      <button type="button" id="eStop">Stopp</button>
+      <button type="button" id="eReset">Ganzes Sample wählen</button>
+    </div>
+    <div class="row">
+      <button type="button" id="eCancel">Verwerfen</button>
+      <button type="button" id="eOk">Übernehmen</button>
+    </div>
   </dialog>
   <script type="module" src="/src/main.ts"></script>
 </body>

@@ -3,6 +3,10 @@ import { AudioEngine } from "./audio/AudioEngine";
 import {
   deleteBankData, deletePad, getSound, importSound, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
+import { openSampleEditor } from "./ui/SampleEditor";
+import { clampRegion } from "./model/region";
+import { ProjectError, parseProjectZip, resolveImport } from "./model/projectFormat";
+import { exportProject, importResolved, toBlob } from "./storage/projectIO";
 import { clampInt, makePads, migrateLegacy, moveBank, newBank, padPrefix, type Bank } from "./model/banks";
 
 const engine = new AudioEngine();
@@ -73,7 +77,7 @@ async function onPad(p: PadConfig): Promise<void> {
   if (engine.isPlaying(p.id)) { engine.stop(p.id); return; }
   const buf = await bufferFor(p.soundId);
   if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
-  engine.play(p.id, buf, { volume: p.volume, loop: p.loop });
+  engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
 }
 
 function openDialog(p: PadConfig): void {
@@ -93,7 +97,7 @@ dialog.addEventListener("close", async () => {
   const action = dialog.returnValue;
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
@@ -105,6 +109,7 @@ dialog.addEventListener("close", async () => {
         const data = await file.arrayBuffer();
         await engine.decode(data.slice(0)); // Prüfung: Datei muss dekodierbar sein
         p.soundId = await importSound(file, data);
+        p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
         if (!p.name) p.name = file.name.replace(/\.[^.]+$/, "");
       } catch {
         say("Diese Datei kann nicht gelesen werden. Bitte WAV oder MP3 verwenden.");
@@ -156,12 +161,71 @@ $<HTMLInputElement>("bCount").addEventListener("change", async (e) => {
   await persistBanks(); render(); // Pads über dem neuen Limit behalten ihre Einstellungen
 });
 
+$("fEdit").addEventListener("click", async () => {
+  const p = editing;
+  if (!p?.soundId) { $("fSound").textContent = "Zuerst eine Audiodatei zuweisen und speichern."; return; }
+  const buf = await bufferFor(p.soundId);
+  if (!buf) { say("Audiodatei fehlt oder ist defekt."); return; }
+  await engine.unlock();
+  openSampleEditor({
+    engine, buffer: buf, region: clampRegion(p.start, p.end, buf.duration),
+    volume: Number($<HTMLInputElement>("fVol").value),
+    onApply: async (r) => {
+      p.start = r?.start; p.end = r?.end;
+      try { await savePad(p); say("Schnitt gespeichert."); } catch { say("Speichern fehlgeschlagen."); }
+      render();
+    },
+  });
+});
+
+let projectName = "Sampler-Projekt";
+$("pExport").addEventListener("click", async () => {
+  const name = prompt("Name des Projekts (wird zum Dateinamen):", projectName)?.trim();
+  if (!name) return;
+  projectName = name;
+  try {
+    say("Erzeuge ZIP …");
+    const bytes = await exportProject(name, banks, store);
+    const url = URL.createObjectURL(toBlob(bytes, "application/zip"));
+    const a = document.createElement("a");
+    a.href = url; a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    say(`ZIP erzeugt (${(bytes.length / 1048576).toFixed(1)} MB), Download gestartet. Bitte prüfe, ob die Datei gespeichert wurde.`);
+  } catch { say("Export fehlgeschlagen (zu wenig Arbeitsspeicher oder Platz?)."); }
+});
+$("pImport").addEventListener("click", () => $<HTMLInputElement>("pFile").click());
+$<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    say("Prüfe Projekt …");
+    const parsed = parseProjectZip(new Uint8Array(await file.arrayBuffer()));
+    const r = resolveImport(parsed);
+    const msg = `Projekt „${parsed.project.name}“ importieren?\n${r.banks.length} Bänke, ${r.sounds.length} Sounds`
+      + (r.warnings.length ? `\n${r.warnings.length} Pad(s) ohne Audiodatei` : "")
+      + "\n\nDas aktuelle Projekt wird ERSETZT. Tipp: vorher exportieren.";
+    if (!confirm(msg)) { say("Import abgebrochen."); return; }
+    engine.stopAll();
+    await importResolved(r); // atomar: bei Fehler bleibt das alte Projekt unverändert
+    store.clear(); r.pads.forEach((p) => store.set(p.id, p));
+    banks = r.banks; current = 0; buffers.clear(); projectName = parsed.project.name;
+    render();
+    say("Projekt importiert." + (r.warnings.length ? ` ${r.warnings.length} Pad(s) ohne Audiodatei.` : ""));
+  } catch (err) {
+    say(err instanceof ProjectError ? err.message : "Import fehlgeschlagen. Das aktuelle Projekt wurde nicht verändert.");
+  }
+});
+
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 $<HTMLInputElement>("editMode").addEventListener("change", (e) => {
   editMode = (e.target as HTMLInputElement).checked;
   $("modeLabel").textContent = editMode ? "BEARBEITEN" : "LIVE";
   $("modeLabel").classList.toggle("edit", editMode);
   $("bankTools").hidden = !editMode;
+  $("projectTools").hidden = !editMode;
   render();
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.open) engine.stopAll(); });

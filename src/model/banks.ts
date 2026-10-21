@@ -1,5 +1,6 @@
 // Reine Logik für Bänke und Pads (ohne Browser, daher gut testbar).
 import type { PadConfig } from "../storage/db";
+import { uuid } from "./ids";
 
 export interface Bank { id: string; name: string; columns: number; padCount: number }
 
@@ -10,7 +11,7 @@ export function clampInt(v: number, min: number, max: number, fallback: number):
   return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
 }
 export function newBank(name: string): Bank {
-  return { id: crypto.randomUUID(), name, columns: 4, padCount: 12 };
+  return { id: uuid(), name, columns: 4, padCount: 12 };
 }
 export function defaultPad(id: string): PadConfig {
   return { id, name: "", color: "#2563eb", volume: 0.9, loop: false, soundId: null };

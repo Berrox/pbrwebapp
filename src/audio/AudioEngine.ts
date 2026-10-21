@@ -1,5 +1,8 @@
 // Audio-Engine: kennt keine Oberfläche. Meldet nur Änderungen über onChange.
-export interface PlayOptions { volume: number; loop: boolean }
+import { clampRegion } from "../model/region";
+
+/** start/end in Sekunden (nicht destruktiv). Fehlen beide, läuft das ganze Sample. */
+export interface PlayOptions { volume: number; loop: boolean; start?: number; end?: number }
 interface Voice { src: AudioBufferSourceNode; gain: GainNode }
 
 const FADE_SECONDS = 0.03; // kurzes Ausblenden gegen Klickgeräusche
@@ -43,7 +46,11 @@ export class AudioEngine {
       src.disconnect(); gain.disconnect();
       if (this.voices.get(padId) === voice) { this.voices.delete(padId); this.emit(); }
     };
-    src.start();
+    if (o.start !== undefined || o.end !== undefined) {
+      const r = clampRegion(o.start, o.end, buffer.duration); // ungültige Grenzen werden korrigiert
+      if (o.loop) { src.loopStart = r.start; src.loopEnd = r.end; src.start(0, r.start); }
+      else src.start(0, r.start, r.end - r.start);
+    } else src.start();
     this.emit();
   }
 

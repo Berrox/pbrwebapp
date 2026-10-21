@@ -4,6 +4,8 @@ import {
   deleteBankData, deletePad, getSound, importSound, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
+import { padAction } from "./model/mode";
+import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
 import { ProjectError, parseProjectZip, resolveImport } from "./model/projectFormat";
 import { exportProject, importResolved, toBlob } from "./storage/projectIO";
@@ -72,9 +74,10 @@ function render(): void { renderTabs(); renderGrid(); }
 
 async function onPad(p: PadConfig): Promise<void> {
   await engine.unlock();
-  if (editMode) { openDialog(p); return; }
-  if (!p.soundId) return; // leere Pads: keine Reaktion, keine Fehlermeldung
-  if (engine.isPlaying(p.id)) { engine.stop(p.id); return; }
+  const action = padAction(editMode ? "edit" : "live", !!p.soundId, engine.isPlaying(p.id));
+  if (action === "edit") { openDialog(p); return; }
+  if (action === "ignore") return; // leere Pads: keine Reaktion, keine Fehlermeldung
+  if (action === "stop") { engine.stop(p.id); return; }
   const buf = await bufferFor(p.soundId);
   if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
   engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
@@ -220,14 +223,36 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
 });
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
-$<HTMLInputElement>("editMode").addEventListener("change", (e) => {
-  editMode = (e.target as HTMLInputElement).checked;
-  $("modeLabel").textContent = editMode ? "BEARBEITEN" : "LIVE";
-  $("modeLabel").classList.toggle("edit", editMode);
-  $("bankTools").hidden = !editMode;
-  $("projectTools").hidden = !editMode;
+const HOLD_MS = 2000;
+let holdTimer: number | undefined;
+let justUnlocked = false;
+const modeBtn = $("modeBtn");
+
+function setMode(edit: boolean): void {
+  editMode = edit;
+  modeBtn.className = edit ? "edit" : "live";
+  modeBtn.textContent = edit ? "✎ BEARBEITEN – tippen für LIVE" : "🔒 LIVE – 2 s halten zum Bearbeiten";
+  $("bankTools").hidden = !edit;
+  $("projectTools").hidden = !edit;
+  try { localStorage.setItem("sampler.mode", edit ? "edit" : "live"); } catch { /* egal */ }
   render();
+}
+modeBtn.addEventListener("click", () => {
+  if (justUnlocked) { justUnlocked = false; return; } // Loslassen nach dem Halten zählt nicht als Tippen
+  if (editMode) setMode(false);
 });
+modeBtn.addEventListener("pointerdown", (e) => {
+  if (editMode) return;
+  e.preventDefault();
+  modeBtn.classList.add("holding");
+  holdTimer = window.setTimeout(() => {
+    justUnlocked = true; setTimeout(() => { justUnlocked = false; }, 500);
+    setMode(true);
+  }, HOLD_MS);
+});
+const cancelHold = () => { clearTimeout(holdTimer); modeBtn.classList.remove("holding"); };
+for (const ev of ["pointerup", "pointerleave", "pointercancel"]) modeBtn.addEventListener(ev, cancelHold);
+document.addEventListener("contextmenu", (e) => { if (!editMode) e.preventDefault(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.open) engine.stopAll(); });
 engine.onChange(render);
 
@@ -244,6 +269,10 @@ async function start(): Promise<void> {
     await savePad(pad); await deletePad(oldId);
   }
   render();
-  say("Bereit. Zum Belegen „Bearbeiten“ einschalten und ein Pad antippen.");
+  let saved: string | null = null;
+  try { saved = localStorage.getItem("sampler.mode"); } catch { /* egal */ }
+  setMode(saved !== "live"); // nach einem Neuladen im Live-Modus bleibt die Sperre aktiv
+  say(editMode ? "Bereit. Pad antippen zum Belegen." : "Bereit. LIVE-Modus.");
+  void setupOffline($("offlineState"));
 }
 void start();

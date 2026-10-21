@@ -8,11 +8,11 @@ import { isPlayMode, type Group, type PlayMode } from "./playRules";
 import { MAX_NOTES, NOTE_TEXT_MAX, NOTE_TITLE_MAX, type Note } from "./notes";
 
 export const FORMAT_NAME = "sampler-project";
-export const FORMAT_VERSION = 4; // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
+export const FORMAT_VERSION = 5; // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
 const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
-export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string }
+export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string; fadeIn?: number; fadeOut?: number }
 export interface BankEntry { id: string; name: string; columns: number; padCount: number; pads: PadEntry[] }
 export interface SoundEntry { id: string; name: string; file: string }
 export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[]; groups: Group[] }
@@ -68,6 +68,8 @@ export function validateProject(raw: unknown): ProjectFile {
       }
       if (p.midiNote !== undefined) out.midiNote = num(p.midiNote, 0, 127, "eine MIDI-Note", true);
       if (p.note !== undefined) out.note = str(p.note, 500, "eine Pad-Notiz");
+      if (p.fadeIn !== undefined) out.fadeIn = num(p.fadeIn, 0, 30, "eine Einblendzeit");
+      if (p.fadeOut !== undefined) out.fadeOut = num(p.fadeOut, 0, 30, "eine Ausblendzeit");
       if (p.playMode !== undefined) {
         if (!isPlayMode(p.playMode)) fail("Das Projekt ist beschädigt: Wiedergabemodus ungültig.");
         out.playMode = p.playMode;
@@ -137,7 +139,7 @@ export function buildProjectZip(
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount,
       pads: Array.from({ length: b.padCount }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
         .filter((x): x is { i: number; p: PadConfig } => !!x.p)
-        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note })),
+        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut })),
     })),
   };
   const files: Zippable = { "project.json": strToU8(JSON.stringify(project, null, 2)) };
@@ -194,7 +196,7 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
       if (groupId && !groupIds.has(groupId)) { warnings.push(`„${p.name || "Pad"}“: Wiedergabegruppe fehlt`); groupId = undefined; }
       const targets = (p.stopTargets ?? []).filter((t) => t !== selfId && known.has(t)); // Selbstzuordnung und tote Verweise entfernen
       if ((p.stopTargets?.length ?? 0) !== targets.length) warnings.push(`„${p.name || "Pad"}“: ungültige Stop-Ziele entfernt`);
-      pads.push({ id: selfId, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId, stopTargets: targets.length ? targets : undefined, note: p.note });
+      pads.push({ id: selfId, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId, stopTargets: targets.length ? targets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut });
     }
     return { id: b.id, name: b.name, columns: b.columns, padCount: b.padCount };
   });

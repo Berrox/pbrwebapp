@@ -15,11 +15,11 @@ class MockSource {
 let sources: MockSource[]; let gains: MockGain[];
 class MockCtx {
   static last: MockCtx;
-  state = "running"; currentTime = 0; destination = {}; resumeCalls = 0; hang = false;
+  state = "running"; currentTime = 0; destination = {}; resumeCalls = 0; hang = false; gainCount = 0; master?: MockGain;
   constructor() { MockCtx.last = this; }
   resume() { this.resumeCalls++; return this.hang ? new Promise<void>(() => {}) : Promise.resolve(); }
   createBufferSource() { const s = new MockSource(); sources.push(s); return s; }
-  createGain() { const g = new MockGain(); gains.push(g); return g; }
+  createGain() { const g = new MockGain(); if (this.gainCount++ === 0) this.master = g; else gains.push(g); return g; } // erster Knoten = Master
 }
 const buf = {} as AudioBuffer;
 let engine: AudioEngine;

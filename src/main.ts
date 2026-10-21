@@ -12,6 +12,9 @@ import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
 import { computeStops, type Group, type PlayMode } from "./model/playRules";
 import { uuid } from "./model/ids";
+import { formatClock, formatElapsed, formatRemaining, parseStopwatch, swElapsed, swInitial, swReset, swStart, swStop, type StopwatchState } from "./model/clock";
+import { copyPad, normalizeFade, swapPads } from "./model/padOps";
+import { WakeLockManager, type WakeApi } from "./input/wakelock";
 import { normalizeNote, volumePercent } from "./model/padNotes";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
@@ -35,6 +38,7 @@ let pendingKey: string | undefined;
 let pendingMidi: number | undefined;
 
 let groups: Group[] = [];
+const padLive = new Map<string, { fill: HTMLElement; tm: HTMLElement }>(); // Fortschrittsanzeige der laufenden Pads
 const notesStore = new NotesStore({ loadAll: loadNotes, save: saveNote, saveOrder: saveNoteOrder, remove: deleteNote });
 const notesUI = mountNotes({
   store: notesStore, panel: $("notes"), list: $("notesList"), status: $("notesStatus"),
@@ -91,6 +95,7 @@ function renderTabs(): void {
 
 function renderGrid(): void {
   grid.replaceChildren();
+  padLive.clear();
   grid.style.gridTemplateColumns = `repeat(${cur().columns}, 1fr)`;
   for (const p of makePads(cur(), store)) {
     const b = document.createElement("button");
@@ -103,9 +108,16 @@ function renderGrid(): void {
     if (notesUI.visible && p.note) { // Pad-Notizen nur bei "Notizen: AN" und nur, wenn vorhanden
       const n = document.createElement("small"); n.className = "padNote"; n.textContent = "✎ " + p.note; b.append(n);
     }
+    if (engine.isPlaying(p.id)) { // Fortschritt und Restzeit nur für laufende Pads
+      const bar = document.createElement("span"); bar.className = "padBar";
+      const fill = document.createElement("i"); bar.append(fill);
+      const tm = document.createElement("small"); tm.className = "padTime";
+      b.append(bar, tm); padLive.set(p.id, { fill, tm });
+    }
     b.addEventListener("pointerdown", (e) => { e.preventDefault(); void onPad(p); });
     grid.append(b);
   }
+  syncProgress();
 }
 function render(): void { renderTabs(); renderGrid(); }
 
@@ -123,6 +135,7 @@ async function onPad(p: PadConfig): Promise<void> {
     if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
     engine.play(p.id, buf, {
       volume: p.volume, loop: p.loop, start: p.start, end: p.end,
+      fadeIn: p.fadeIn, fadeOut: p.fadeOut,
       stopIds: computeStops(p, engine.playingIds(), (id) => store.get(id), groups), // erst jetzt ausgewertet, direkt vor dem Start
     });
     if (!engine.running) say("Audio wird reaktiviert … (Display einmal berühren, falls nichts zu hören ist)");
@@ -179,6 +192,10 @@ function openDialog(p: PadConfig): void {
   $<HTMLInputElement>("fColor").value = p.color;
   $<HTMLInputElement>("fVol").value = String(p.volume);
   showVolume();
+  $<HTMLInputElement>("fFadeIn").value = String(p.fadeIn ?? 0);
+  $<HTMLInputElement>("fFadeOut").value = String(p.fadeOut ?? 0);
+  showFades();
+  fillOpTargets(p);
   $("fNoteRow").hidden = !notesUI.visible; // Notizfeld nur bei "Notizen: AN"
   $<HTMLTextAreaElement>("fNote").value = p.note ?? "";
   $<HTMLInputElement>("fLoop").checked = p.loop;
@@ -198,13 +215,15 @@ dialog.addEventListener("close", async () => {
   let conflictMsg = "";
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined, fadeIn: undefined, fadeOut: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
     p.volume = Number($<HTMLInputElement>("fVol").value);
     engine.setVolume(p.id, p.volume);
     p.loop = $<HTMLInputElement>("fLoop").checked;
+    p.fadeIn = normalizeFade(Number($<HTMLInputElement>("fFadeIn").value));
+    p.fadeOut = normalizeFade(Number($<HTMLInputElement>("fFadeOut").value));
     const pads = makePads(cur(), store);
     const kc = findConflict(pads, p.id, "key", pendingKey), mc = findConflict(pads, p.id, "midiNote", pendingMidi);
     if (kc) conflictMsg += `Taste ${keyLabel(pendingKey!)} ist schon an „${kc.name || "Pad"}“ vergeben und wurde nicht übernommen. `;
@@ -422,6 +441,7 @@ async function preloadBank(): Promise<void> {
 for (const ev of ["touchend", "pointerup", "click", "keydown"]) {
   document.addEventListener(ev, () => {
     engine.gestureResume();
+    if (wake.state === "error") wake.refresh();
     setTimeout(() => { if (engine.running && status.textContent?.startsWith("Audio wird")) say(""); }, 400);
   }, { capture: true, passive: true });
 }
@@ -515,6 +535,109 @@ $("fVol").addEventListener("input", () => {
   if (editing) engine.setVolume(editing.id, Number($<HTMLInputElement>("fVol").value)); // laufendes Pad hörbar anpassen
 });
 
+// ---- Restzeit auf laufenden Pads ----
+let progressTimer: number | undefined;
+function tickProgress(): void {
+  for (const [id, el] of padLive) {
+    const pr = engine.progress(id);
+    if (!pr) continue;
+    if (pr.loop || !Number.isFinite(pr.total) || pr.total <= 0) { el.tm.textContent = "∞ Loop"; el.fill.style.width = "0%"; continue; }
+    el.tm.textContent = "−" + formatRemaining(Math.max(0, pr.total - pr.elapsed));
+    el.fill.style.width = `${Math.min(100, (pr.elapsed / pr.total) * 100)}%`;
+  }
+}
+function syncProgress(): void { // Zeitgeber läuft nur, solange ein Pad spielt
+  if (padLive.size && progressTimer === undefined) progressTimer = window.setInterval(tickProgress, 100);
+  else if (!padLive.size && progressTimer !== undefined) { clearInterval(progressTimer); progressTimer = undefined; }
+  tickProgress();
+}
+
+// ---- Master-Lautstärke ----
+function applyMaster(v: number, persist = true): void {
+  engine.setMasterVolume(v);
+  $("masterPct").textContent = volumePercent(v);
+  if (persist) { try { localStorage.setItem("sampler.master", String(v)); } catch { /* egal */ } }
+}
+$("masterVol").addEventListener("input", () => applyMaster(Number($<HTMLInputElement>("masterVol").value)));
+
+// ---- Bildschirm wach halten ----
+const wake = new WakeLockManager(("wakeLock" in navigator ? navigator.wakeLock : undefined) as unknown as WakeApi | undefined);
+let wantWake = false;
+const WAKE_TEXT = { unsupported: "☀ Wach: nicht verfügbar", off: "☀ Wach: AUS", armed: "☀ Wach: AN (nur Live)", on: "☀ Wach: AN ✓", error: "☀ Wach: Fehler, tippen" };
+const wakeBtn = $<HTMLButtonElement>("wakeBtn");
+wake.onChange = () => {
+  const st = wake.state;
+  wakeBtn.textContent = WAKE_TEXT[st];
+  wakeBtn.disabled = st === "unsupported";
+  wakeBtn.classList.toggle("active", st === "on" || st === "armed");
+  wakeBtn.setAttribute("aria-pressed", String(st === "on" || st === "armed"));
+};
+wake.onChange();
+wakeBtn.addEventListener("click", () => {
+  if (wake.state === "error") { wake.refresh(); return; }
+  wantWake = !wantWake;
+  try { localStorage.setItem("sampler.wake", wantWake ? "on" : "off"); } catch { /* egal */ }
+  wake.setEnabled(wantWake);
+});
+document.addEventListener("visibilitychange", () => wake.setVisible(document.visibilityState === "visible"));
+
+// ---- Uhrzeit und Stoppuhr ----
+function loadStopwatch(): StopwatchState {
+  try { return parseStopwatch(JSON.parse(localStorage.getItem("sampler.sw") ?? "null")); } catch { return swInitial(); }
+}
+let stopwatch = loadStopwatch();
+const saveStopwatch = () => { try { localStorage.setItem("sampler.sw", JSON.stringify(stopwatch)); } catch { /* egal */ } };
+function renderClock(): void {
+  const now = Date.now();
+  const el = swElapsed(stopwatch, now);
+  const running = stopwatch.since !== null;
+  $("clock").textContent = formatClock(new Date(now));
+  $("swToggle").textContent = `⏱ ${formatElapsed(el)} ${running ? "⏸" : "▶"}`;
+  $("swToggle").setAttribute("aria-label", running ? "Stoppuhr anhalten" : "Stoppuhr starten");
+  $<HTMLButtonElement>("swReset").disabled = running || el === 0; // Zurücksetzen nur bei angehaltener Uhr
+}
+$("swToggle").addEventListener("click", () => {
+  stopwatch = stopwatch.since === null ? swStart(stopwatch, Date.now()) : swStop(stopwatch, Date.now());
+  saveStopwatch(); renderClock();
+});
+$("swReset").addEventListener("click", () => { stopwatch = swReset(); saveStopwatch(); renderClock(); });
+setInterval(renderClock, 250);
+renderClock();
+
+// ---- Ein-/Ausblenden im Pad-Dialog ----
+function showFades(): void {
+  for (const [inp, out] of [["fFadeIn", "fFadeInOut"], ["fFadeOut", "fFadeOutOut"]]) {
+    const v = Number($<HTMLInputElement>(inp).value);
+    $(out).textContent = v > 0 ? `${v.toFixed(1).replace(".", ",")} s` : "aus";
+  }
+}
+$("fFadeIn").addEventListener("input", showFades);
+$("fFadeOut").addEventListener("input", showFades);
+
+// ---- Pad kopieren / tauschen ----
+function fillOpTargets(p: PadConfig): void {
+  const sel = $<HTMLSelectElement>("fOpTarget");
+  sel.replaceChildren();
+  for (const b of banks) makePads(b, store).forEach((q, i) => {
+    if (q.id !== p.id) sel.append(new Option(`${b.name} – ${i + 1}${q.name ? ": " + q.name : q.soundId ? "" : " (leer)"}`, q.id));
+  });
+}
+async function padOp(kind: "copy" | "swap"): Promise<void> {
+  const p = editing, to = store.get($<HTMLSelectElement>("fOpTarget").value);
+  if (!p || !to) { say("Bitte ein Ziel-Pad wählen."); return; }
+  if (kind === "copy" && (to.soundId || to.name) && !confirm(`Der Inhalt von „${to.name || "Pad"}“ wird durch „${p.name || "Pad"}“ ersetzt. Fortfahren?`)) return;
+  engine.stop(p.id); engine.stop(to.id); // betroffene Pads nicht weiterlaufen lassen
+  const changed = kind === "copy" ? copyPad(store, p.id, to.id) : swapPads(store, p.id, to.id);
+  dialog.close("cancel"); // ungespeicherte Eingaben im Dialog werden verworfen
+  try {
+    for (const id of changed) { const q = store.get(id); if (q) await savePad(q); }
+    say(kind === "copy" ? "Pad kopiert." : "Pads getauscht.");
+  } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
+  render();
+}
+$("fCopy").addEventListener("click", () => void padOp("copy"));
+$("fSwap").addEventListener("click", () => void padOp("swap"));
+
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");
 
@@ -525,6 +648,7 @@ function setMode(edit: boolean): void {
   $("bankTools").hidden = !edit;
   $("projectTools").hidden = !edit;
   notesUI.setEditable(edit); // im Live-Modus sind Notizen nur lesbar
+  wake.setLive(!edit); // Bildschirm nur im Live-Modus wach halten
   try { localStorage.setItem("sampler.mode", edit ? "edit" : "live"); } catch { /* egal */ }
   render();
 }
@@ -597,6 +721,12 @@ async function start(): Promise<void> {
   setMode(saved !== "live"); // nach einem Neuladen im Live-Modus bleibt die Sperre aktiv
   say(editMode ? "Bereit. Pad antippen zum Belegen." : "Bereit. LIVE-Modus.");
   void setupOffline($("offlineState"));
+  let m = 1;
+  try { const raw = localStorage.getItem("sampler.master"); if (raw !== null && Number.isFinite(Number(raw))) m = Math.min(1, Math.max(0, Number(raw))); } catch { /* egal */ }
+  $<HTMLInputElement>("masterVol").value = String(m);
+  applyMaster(m, false);
+  try { wantWake = localStorage.getItem("sampler.wake") === "on"; } catch { /* egal */ }
+  wake.setEnabled(wantWake);
   $<HTMLInputElement>("fFile").accept = AUDIO_ACCEPT;
   $<HTMLInputElement>("libFiles").accept = AUDIO_ACCEPT;
   void preloadBank();

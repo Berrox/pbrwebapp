@@ -10,6 +10,7 @@ export interface PadConfig {
   key?: string; midiNote?: number; // Tastaturkürzel (event.code) und MIDI-Note, optional
   playMode?: PlayMode; groupId?: string; stopTargets?: string[]; // Wiedergaberegeln (leer = parallel)
   note?: string; // persönliche Notiz zum Pad (an die Pad-ID gebunden)
+  fadeIn?: number; fadeOut?: number; // Ein-/Ausblendzeit in Sekunden (leer = aus)
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
 export interface StoredNote extends Note { order: number }

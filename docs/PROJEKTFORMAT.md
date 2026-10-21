@@ -31,3 +31,9 @@ Pads können zusätzlich `"key"` (Tastencode, z. B. `KeyQ`) und `"midiNote"` (0�
 
 ## Nachtrag (Notizen, Version 2)
 Neues optionales Feld `"notes": [{ "id": "…", "title": "…", "text": "…" }]`. Die Reihenfolge im Array ist die Reihenfolge in der App. Die App schreibt ab jetzt `"version": 2`. Version 1 wird weiter gelesen (dann ohne Notizen). Ältere App-Versionen lehnen Version 2 mit dem Hinweis auf eine neuere Version ab.
+
+## Nachtrag (Wiedergaberegeln, Version 3)
+Pads: optional `playMode`, `groupId`, `stopTargets`. Projekt: optional `groups`. Die App schreibt `"version": 3`; Version 1 und 2 werden weiter gelesen. Details: `docs/WIEDERGABEREGELN.md`.
+
+## Nachtrag (Pad-Notizen, Version 4)
+Pads: optionales Feld `note` (Text, höchstens 500 Zeichen). Die App schreibt `"version": 4`; Version 1 bis 3 werden weiter gelesen. Details: `docs/PADNOTIZEN.md`.

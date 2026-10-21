@@ -7,14 +7,16 @@ const STATUS_TEXT = { idle: "", saving: "Speichern …", saved: "✓ Gespeichert
 interface Elements {
   store: NotesStore; panel: HTMLElement; list: HTMLElement; status: HTMLElement;
   addBtn: HTMLButtonElement; toggle: HTMLButtonElement;
+  onVisibility?: (visible: boolean) => void; // nach Umschalten durch den Benutzer
 }
-export function mountNotes({ store, panel, list, status, addBtn, toggle }: Elements) {
+export function mountNotes({ store, panel, list, status, addBtn, toggle, onVisibility }: Elements) {
   let editable = false;
 
   function setVisible(v: boolean): void {
     panel.hidden = !v; // nur ausblenden: Inhalte bleiben unverändert erhalten
     toggle.setAttribute("aria-pressed", String(v));
     toggle.classList.toggle("active", v);
+    toggle.textContent = v ? "📝 Notizen: AN" : "📝 Notizen: AUS";
     try { localStorage.setItem(VIS_KEY, v ? "on" : "off"); } catch { /* egal */ }
     if (!v) void store.flush();
   }
@@ -66,7 +68,7 @@ export function mountNotes({ store, panel, list, status, addBtn, toggle }: Eleme
   }
   store.onList = render;
   store.onState = renderStatus;
-  toggle.addEventListener("click", () => setVisible(panel.hidden));
+  toggle.addEventListener("click", () => { setVisible(panel.hidden); onVisibility?.(!panel.hidden); });
   addBtn.addEventListener("click", async () => {
     await store.add();
     (list.querySelector(".note:last-child input") as HTMLInputElement | null)?.focus();
@@ -77,5 +79,5 @@ export function mountNotes({ store, panel, list, status, addBtn, toggle }: Eleme
   let initial = false;
   try { initial = localStorage.getItem(VIS_KEY) === "on"; } catch { /* egal */ }
   setVisible(initial);
-  return { render, setEditable(e: boolean) { editable = e; render(); } };
+  return { render, setEditable(e: boolean) { editable = e; render(); }, get visible(): boolean { return !panel.hidden; } };
 }

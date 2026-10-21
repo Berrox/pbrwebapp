@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { AudioEngine } from "../src/audio/AudioEngine";
 
-class MockParam { value = 1; cancelScheduledValues() {} setValueAtTime() {} linearRampToValueAtTime() {} }
+class MockParam { value = 1; cancelScheduledValues() {} setValueAtTime() {} linearRampToValueAtTime() {} setTargetAtTime(v: number) { this.value = v; } }
 class MockGain { gain = new MockParam(); connect(n: unknown) { return n; } disconnect() {} }
 class MockSource {
   buffer: unknown = null; loop = false; stopped = false; started = false;
@@ -132,6 +132,27 @@ describe("AudioEngine", () => {
       engine.play("a", {} as AudioBuffer, { volume: 1, loop: false });
       expect(ctx.resumeCalls).toBeGreaterThan(0);
       expect(engine.isPlaying("a")).toBe(true);
+    });
+  });
+  describe("Lautstärke laufender Pads", () => {
+    it("ändert die Lautstärke sofort und begrenzt auf 0 bis 1", () => {
+      engine.play("a", {} as AudioBuffer, { volume: 1, loop: false });
+      engine.setVolume("a", 0.25);
+      expect(gains[0].gain.value).toBe(0.25);
+      engine.setVolume("a", 7);
+      expect(gains[0].gain.value).toBe(1);
+      engine.setVolume("a", -1);
+      expect(gains[0].gain.value).toBe(0);
+    });
+    it("verändert andere Pads nicht", () => {
+      engine.play("a", {} as AudioBuffer, { volume: 0.5, loop: true });
+      engine.play("b", {} as AudioBuffer, { volume: 0.8, loop: false });
+      engine.setVolume("a", 0.3);
+      expect(gains[0].gain.value).toBe(0.3);
+      expect(gains[1].gain.value).toBe(0.8);
+    });
+    it("ignoriert Pads, die nicht laufen", () => {
+      expect(() => engine.setVolume("x", 0.5)).not.toThrow();
     });
   });
 });

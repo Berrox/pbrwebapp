@@ -4,17 +4,18 @@ import type { PadConfig } from "../storage/db";
 import { padId, type Bank } from "./banks";
 import { isAssignableKey } from "./keys";
 import { audioExtension, audioMime } from "./audioFormats";
+import { isPlayMode, type Group, type PlayMode } from "./playRules";
 import { MAX_NOTES, NOTE_TEXT_MAX, NOTE_TITLE_MAX, type Note } from "./notes";
 
 export const FORMAT_NAME = "sampler-project";
-export const FORMAT_VERSION = 2; // 2: Notizen. Version 1 bleibt importierbar (ohne Notizen).
+export const FORMAT_VERSION = 4; // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
 const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
-export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number }
+export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string }
 export interface BankEntry { id: string; name: string; columns: number; padCount: number; pads: PadEntry[] }
 export interface SoundEntry { id: string; name: string; file: string }
-export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[] }
+export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[]; groups: Group[] }
 export interface ParsedProject { project: ProjectFile; audio: Map<string, Uint8Array>; missingSounds: string[] }
 
 export class ProjectError extends Error {}
@@ -66,6 +67,24 @@ export function validateProject(raw: unknown): ProjectFile {
         out.key = k;
       }
       if (p.midiNote !== undefined) out.midiNote = num(p.midiNote, 0, 127, "eine MIDI-Note", true);
+      if (p.note !== undefined) out.note = str(p.note, 500, "eine Pad-Notiz");
+      if (p.playMode !== undefined) {
+        if (!isPlayMode(p.playMode)) fail("Das Projekt ist beschädigt: Wiedergabemodus ungültig.");
+        out.playMode = p.playMode;
+      }
+      if (p.groupId !== undefined) {
+        const g = str(p.groupId, 64, "eine Gruppen-ID");
+        if (!SAFE_ID.test(g)) fail("Das Projekt ist beschädigt: Gruppen-ID ungültig.");
+        out.groupId = g;
+      }
+      if (p.stopTargets !== undefined) {
+        if (!Array.isArray(p.stopTargets) || p.stopTargets.length > 1000) fail("Das Projekt ist beschädigt: Stop-Ziele ungültig.");
+        out.stopTargets = p.stopTargets.map((t: unknown) => {
+          const id = str(t, 80, "ein Stop-Ziel");
+          if (!/^[A-Za-z0-9_-]{1,64}:\d{1,2}$/.test(id)) fail("Das Projekt ist beschädigt: Stop-Ziel ungültig.");
+          return id;
+        });
+      }
       return out;
     });
     return { id, name: str(b.name, 60, "ein Bank-Name"), columns: num(b.columns, 1, 8, "die Spaltenzahl", true), padCount, pads };
@@ -90,11 +109,21 @@ export function validateProject(raw: unknown): ProjectFile {
     noteIds.add(id);
     return { id, title: str(n.title, NOTE_TITLE_MAX, "ein Notiztitel"), text: str(n.text, NOTE_TEXT_MAX, "ein Notiztext") };
   });
-  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds, notes };
+  const rawGroups = raw.groups === undefined ? [] : raw.groups; // ältere Projekte haben keine Gruppen
+  if (!Array.isArray(rawGroups) || rawGroups.length > 100) fail("Das Projekt ist beschädigt: Gruppen ungültig.");
+  const groupIds = new Set<string>();
+  const groups = rawGroups.map((g: unknown): Group => {
+    if (!isObj(g)) fail("Das Projekt ist beschädigt: Gruppe ungültig.");
+    const id = str(g.id, 64, "eine Gruppen-ID");
+    if (!SAFE_ID.test(id) || groupIds.has(id)) fail("Das Projekt ist beschädigt: Gruppen-ID ungültig.");
+    groupIds.add(id);
+    return { id, name: str(g.name, 60, "ein Gruppenname"), crossBank: g.crossBank === true };
+  });
+  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds, notes, groups };
 }
 
 export function buildProjectZip(
-  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[], notes: Note[] = [],
+  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[], notes: Note[] = [], groups: Group[] = [],
 ): Uint8Array {
   const soundEntries: SoundEntry[] = sounds.map((s) => ({
     id: s.id, name: s.name, file: `audio/${s.id}.${audioExtension(s.name) ?? "bin"}`,
@@ -102,12 +131,13 @@ export function buildProjectZip(
   const project: ProjectFile = {
     format: FORMAT_NAME, version: FORMAT_VERSION, name, exportedAt: new Date().toISOString(),
     sounds: soundEntries,
+    groups: groups.map(({ id, name, crossBank }) => ({ id, name, crossBank })),
     notes: notes.map(({ id, title, text }) => ({ id, title, text })), // Reihenfolge = Reihenfolge in der Liste
     banks: banks.map((b) => ({
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount,
       pads: Array.from({ length: b.padCount }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
         .filter((x): x is { i: number; p: PadConfig } => !!x.p)
-        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote })),
+        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note })),
     })),
   };
   const files: Zippable = { "project.json": strToU8(JSON.stringify(project, null, 2)) };
@@ -148,16 +178,23 @@ export function parseProjectZip(bytes: Uint8Array): ParsedProject {
 }
 
 export interface ResolvedImport {
-  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[]; notes: Note[];
+  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[]; notes: Note[]; groups: Group[];
 }
 /** Wandelt das geprüfte Projekt in App-Daten um. Pads mit fehlender Audiodatei werden leer markiert. */
 export function resolveImport(parsed: ParsedProject): ResolvedImport {
   const warnings: string[] = [], pads: PadConfig[] = [];
+  const groupIds = new Set(parsed.project.groups.map((g) => g.id));
+  const known = new Set(parsed.project.banks.flatMap((b) => b.pads.map((p) => padId(b.id, p.index))));
   const banks: Bank[] = parsed.project.banks.map((b) => {
     for (const p of b.pads) {
       let soundId = p.soundId;
       if (soundId && !parsed.audio.has(soundId)) { warnings.push(`„${p.name || "Pad"}“: Audiodatei fehlt`); soundId = null; }
-      pads.push({ id: padId(b.id, p.index), name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote });
+      const selfId = padId(b.id, p.index);
+      let groupId = p.groupId;
+      if (groupId && !groupIds.has(groupId)) { warnings.push(`„${p.name || "Pad"}“: Wiedergabegruppe fehlt`); groupId = undefined; }
+      const targets = (p.stopTargets ?? []).filter((t) => t !== selfId && known.has(t)); // Selbstzuordnung und tote Verweise entfernen
+      if ((p.stopTargets?.length ?? 0) !== targets.length) warnings.push(`„${p.name || "Pad"}“: ungültige Stop-Ziele entfernt`);
+      pads.push({ id: selfId, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId, stopTargets: targets.length ? targets : undefined, note: p.note });
     }
     return { id: b.id, name: b.name, columns: b.columns, padCount: b.padCount };
   });
@@ -165,5 +202,5 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
     id: s.id, name: s.name, bytes: parsed.audio.get(s.id)!,
     mime: audioMime(s.name),
   }));
-  return { banks, pads, sounds, warnings, notes: parsed.project.notes };
+  return { banks, pads, sounds, warnings, notes: parsed.project.notes, groups: parsed.project.groups };
 }

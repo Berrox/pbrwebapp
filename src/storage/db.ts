@@ -1,23 +1,28 @@
 import { openDB, type DBSchema } from "idb";
 import { contentHash, uuid } from "../model/ids";
 import type { Note } from "../model/notes";
+import type { Group, PlayMode } from "../model/playRules";
 
 export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob; duration?: number }
 export interface PadConfig {
   id: string; name: string; color: string; volume: number; loop: boolean; soundId: string | null;
   start?: number; end?: number; // Schnitt in Sekunden (nicht destruktiv); leer = ganzes Sample
   key?: string; midiNote?: number; // Tastaturkürzel (event.code) und MIDI-Note, optional
+  playMode?: PlayMode; groupId?: string; stopTargets?: string[]; // Wiedergaberegeln (leer = parallel)
+  note?: string; // persönliche Notiz zum Pad (an die Pad-ID gebunden)
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
 export interface StoredNote extends Note { order: number }
+export interface StoredGroup extends Group { order: number }
 interface SamplerDB extends DBSchema {
   notes: { key: string; value: StoredNote };
+  groups: { key: string; value: StoredGroup };
   banks: { key: string; value: StoredBank };
   sounds: { key: string; value: StoredSound; indexes: { hash: string } };
   pads: { key: string; value: PadConfig };
 }
 
-const dbPromise = openDB<SamplerDB>("sampler", 3, {
+const dbPromise = openDB<SamplerDB>("sampler", 4, {
   upgrade(db, oldVersion) {
     if (oldVersion < 1) {
       db.createObjectStore("sounds", { keyPath: "id" }).createIndex("hash", "hash");
@@ -25,6 +30,7 @@ const dbPromise = openDB<SamplerDB>("sampler", 3, {
     }
     if (oldVersion < 2) db.createObjectStore("banks", { keyPath: "id" });
     if (oldVersion < 3) db.createObjectStore("notes", { keyPath: "id" });
+    if (oldVersion < 4) db.createObjectStore("groups", { keyPath: "id" });
   },
 });
 
@@ -46,17 +52,18 @@ export async function loadPads(): Promise<PadConfig[]> { return (await dbPromise
 export async function loadAllSounds(): Promise<StoredSound[]> { return (await dbPromise).getAll("sounds"); }
 /** Ersetzt das gesamte Projekt in EINER Transaktion: entweder alles oder (bei Fehler) nichts. */
 export async function replaceAllData(d: {
-  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[]; notes: Note[];
+  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[]; notes: Note[]; groups: Group[];
 }): Promise<void> {
   const db = await dbPromise;
-  const tx = db.transaction(["banks", "pads", "sounds", "notes"], "readwrite");
+  const tx = db.transaction(["banks", "pads", "sounds", "notes", "groups"], "readwrite");
   const jobs: Promise<unknown>[] = [
-    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(), tx.objectStore("notes").clear(),
+    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(), tx.objectStore("notes").clear(), tx.objectStore("groups").clear(),
   ];
   d.banks.forEach((b, order) => jobs.push(tx.objectStore("banks").put({ ...b, order })));
   d.pads.forEach((p) => jobs.push(tx.objectStore("pads").put(p)));
   d.sounds.forEach((s) => jobs.push(tx.objectStore("sounds").put(s)));
   d.notes.forEach((n, order) => jobs.push(tx.objectStore("notes").put({ ...n, order })));
+  d.groups.forEach((g, order) => jobs.push(tx.objectStore("groups").put({ ...g, order })));
   await Promise.all([...jobs, tx.done]);
 }
 export type SoundInfo = Omit<StoredSound, "blob">;
@@ -89,6 +96,15 @@ export async function saveNoteOrder(notes: Note[]): Promise<void> {
   await Promise.all([...notes.map((n, order) => tx.store.put({ ...n, order })), tx.done]);
 }
 export async function deleteNote(id: string): Promise<void> { await (await dbPromise).delete("notes", id); }
+export async function loadGroups(): Promise<Group[]> {
+  const all = await (await dbPromise).getAll("groups");
+  return all.sort((a, b) => a.order - b.order).map(({ order: _order, ...g }) => g);
+}
+/** Schreibt die komplette Gruppenliste neu (in einer Transaktion). */
+export async function saveGroups(groups: Group[]): Promise<void> {
+  const tx = (await dbPromise).transaction("groups", "readwrite");
+  await Promise.all([tx.store.clear(), ...groups.map((g, order) => tx.store.put({ ...g, order })), tx.done]);
+}
 export async function deletePad(id: string): Promise<void> { await (await dbPromise).delete("pads", id); }
 export async function loadBanks(): Promise<StoredBank[]> {
   return (await (await dbPromise).getAll("banks")).sort((a, b) => a.order - b.order);

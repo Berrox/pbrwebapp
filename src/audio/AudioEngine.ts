@@ -2,7 +2,7 @@
 import { clampRegion } from "../model/region";
 
 /** start/end in Sekunden (nicht destruktiv). Fehlen beide, läuft das ganze Sample. */
-export interface PlayOptions { volume: number; loop: boolean; start?: number; end?: number }
+export interface PlayOptions { volume: number; loop: boolean; start?: number; end?: number; stopIds?: string[] }
 interface Voice { src: AudioBufferSourceNode; gain: GainNode }
 
 const FADE_SECONDS = 0.03; // kurzes Ausblenden gegen Klickgeräusche
@@ -38,6 +38,7 @@ export class AudioEngine {
   play(padId: string, buffer: AudioBuffer, o: PlayOptions): void {
     const ctx = this.getCtx();
     if (ctx.state !== "running") void ctx.resume().catch(() => { /* egal */ });
+    for (const id of o.stopIds ?? []) if (id !== padId) this.stop(id); // Stop-Regeln des Pads, einmal pro Start
     this.killNow(padId); // nie doppelt: alte Wiedergabe sofort beenden
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
@@ -66,6 +67,15 @@ export class AudioEngine {
     this.voices.delete(padId);
     this.fadeOut(v);
     this.emit();
+  }
+
+  /** Ändert die Lautstärke eines laufenden Pads sofort und weich (ohne Knacken). Andere Pads bleiben unberührt. */
+  setVolume(padId: string, volume: number): void {
+    const v = this.voices.get(padId);
+    if (!v || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setTargetAtTime(Math.min(1, Math.max(0, volume)), t, 0.01);
   }
 
   /** STOP ALL: global, unabhängig von Bank und Ansicht. */

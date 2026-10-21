@@ -1,7 +1,7 @@
 import "./styles/theme.css";
 import { AudioEngine } from "./audio/AudioEngine";
 import {
-  deleteBankData, deleteNote, deletePad, loadNotes, saveNote, saveNoteOrder, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
+  deleteBankData, deleteNote, deletePad, loadGroups, saveGroups, loadNotes, saveNote, saveNoteOrder, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
 import { findConflict, isAssignableKey, keyLabel } from "./model/keys";
@@ -10,6 +10,9 @@ import { formatDuration, formatSize, isSupportedAudioName, isValidSoundName, pad
 import { NotesStore } from "./model/notes";
 import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
+import { computeStops, type Group, type PlayMode } from "./model/playRules";
+import { uuid } from "./model/ids";
+import { normalizeNote, volumePercent } from "./model/padNotes";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
@@ -31,10 +34,11 @@ let learning: "key" | "midi" | null = null; // wartet gerade auf Tastendruck bzw
 let pendingKey: string | undefined;
 let pendingMidi: number | undefined;
 
+let groups: Group[] = [];
 const notesStore = new NotesStore({ loadAll: loadNotes, save: saveNote, saveOrder: saveNoteOrder, remove: deleteNote });
 const notesUI = mountNotes({
   store: notesStore, panel: $("notes"), list: $("notesList"), status: $("notesStatus"),
-  addBtn: $<HTMLButtonElement>("noteAdd"), toggle: $<HTMLButtonElement>("notesBtn"),
+  addBtn: $<HTMLButtonElement>("noteAdd"), toggle: $<HTMLButtonElement>("notesBtn"), onVisibility: () => render(),
 });
 
 const cur = (): Bank => banks[current];
@@ -96,6 +100,9 @@ function renderGrid(): void {
     b.textContent = p.name || (editMode ? "+ leer" : "");
     const hint = [p.key ? `[${keyLabel(p.key)}]` : "", p.midiNote !== undefined ? `♪${noteName(p.midiNote)}` : ""].filter(Boolean).join(" ");
     if (hint && p.soundId) { const s = document.createElement("small"); s.textContent = hint; b.append(s); }
+    if (notesUI.visible && p.note) { // Pad-Notizen nur bei "Notizen: AN" und nur, wenn vorhanden
+      const n = document.createElement("small"); n.className = "padNote"; n.textContent = "✎ " + p.note; b.append(n);
+    }
     b.addEventListener("pointerdown", (e) => { e.preventDefault(); void onPad(p); });
     grid.append(b);
   }
@@ -114,7 +121,10 @@ async function onPad(p: PadConfig): Promise<void> {
     if (!buffers.has(p.soundId)) say("Lade Sound …");
     const buf = await bufferFor(p.soundId);
     if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
-    engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
+    engine.play(p.id, buf, {
+      volume: p.volume, loop: p.loop, start: p.start, end: p.end,
+      stopIds: computeStops(p, engine.playingIds(), (id) => store.get(id), groups), // erst jetzt ausgewertet, direkt vor dem Start
+    });
     if (!engine.running) say("Audio wird reaktiviert … (Display einmal berühren, falls nichts zu hören ist)");
   } finally { loading.delete(p.id); }
 }
@@ -164,14 +174,19 @@ function refreshLearn(): void {
 
 function openDialog(p: PadConfig): void {
   editing = p;
+  dialog.returnValue = ""; // sonst gilt bei Esc der Wert vom letzten Mal (z. B. „Pad leeren“)
   $<HTMLInputElement>("fName").value = p.name;
   $<HTMLInputElement>("fColor").value = p.color;
   $<HTMLInputElement>("fVol").value = String(p.volume);
+  showVolume();
+  $("fNoteRow").hidden = !notesUI.visible; // Notizfeld nur bei "Notizen: AN"
+  $<HTMLTextAreaElement>("fNote").value = p.note ?? "";
   $<HTMLInputElement>("fLoop").checked = p.loop;
   $<HTMLInputElement>("fFile").value = "";
   pendingKey = p.key; pendingMidi = p.midiNote; learning = null; refreshLearn();
   $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
   void fillLibrarySelect(p);
+  fillBehavior(p);
   dialog.showModal();
 }
 
@@ -183,11 +198,12 @@ dialog.addEventListener("close", async () => {
   let conflictMsg = "";
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
     p.volume = Number($<HTMLInputElement>("fVol").value);
+    engine.setVolume(p.id, p.volume);
     p.loop = $<HTMLInputElement>("fLoop").checked;
     const pads = makePads(cur(), store);
     const kc = findConflict(pads, p.id, "key", pendingKey), mc = findConflict(pads, p.id, "midiNote", pendingMidi);
@@ -195,6 +211,13 @@ dialog.addEventListener("close", async () => {
     else p.key = pendingKey;
     if (mc) conflictMsg += `MIDI-Note ${pendingMidi} ist schon an „${mc.name || "Pad"}“ vergeben und wurde nicht übernommen.`;
     else p.midiNote = pendingMidi;
+    const mv = $<HTMLSelectElement>("fMode").value as PlayMode;
+    p.playMode = mv === "parallel" ? undefined : mv; // "parallel" = Standard, wird nicht extra gespeichert
+    p.groupId = $<HTMLSelectElement>("fGroup").value || undefined;
+    const targets = [...document.querySelectorAll<HTMLInputElement>("#fTargets input:checked")].map((c) => c.value);
+    p.stopTargets = targets.length ? targets : undefined;
+    if (!$("fNoteRow").hidden) p.note = normalizeNote($<HTMLTextAreaElement>("fNote").value); // bei "Notizen: AUS" bleibt die Notiz unangetastet
+    if (mv === "group" && !p.groupId) conflictMsg += " Hinweis: „Gruppe exklusiv“ wirkt erst, wenn eine Wiedergabegruppe gewählt ist.";
     const file = $<HTMLInputElement>("fFile").files?.[0];
     const libId = $<HTMLSelectElement>("fLibrary").value;
     let newId: string | null = null, newName = "";
@@ -205,7 +228,7 @@ dialog.addEventListener("close", async () => {
       p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
       if (!p.name) p.name = newName.replace(/\.[^.]+$/, "");
     }
-  } else { render(); return; }
+  } else { engine.setVolume(p.id, p.volume); render(); return; } // Abbrechen: Lautstärke zurücksetzen
   try { await savePad(p); say(conflictMsg || "Gespeichert."); }
   catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
   render();
@@ -275,7 +298,7 @@ $("pExport").addEventListener("click", async () => {
   projectName = name;
   try {
     say("Erzeuge ZIP …");
-    const bytes = await exportProject(name, banks, store, notesStore.notes);
+    const bytes = await exportProject(name, banks, store, notesStore.notes, groups);
     const url = URL.createObjectURL(toBlob(bytes, "application/zip"));
     const a = document.createElement("a");
     a.href = url; a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
@@ -295,7 +318,7 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
     const parsed = parseProjectZip(new Uint8Array(await file.arrayBuffer()));
     const r = resolveImport(parsed);
     const msg = `Projekt „${parsed.project.name}“ importieren?\n${r.banks.length} Bänke, ${r.sounds.length} Sounds`
-      + (r.warnings.length ? `\n${r.warnings.length} Pad(s) ohne Audiodatei` : "")
+      + (r.warnings.length ? `\n${r.warnings.length} Hinweis(e), z. B.: ${r.warnings[0]}` : "")
       + "\n\nDas aktuelle Projekt wird ERSETZT. Tipp: vorher exportieren.";
     if (!confirm(msg)) { say("Import abgebrochen."); return; }
     engine.stopAll();
@@ -303,9 +326,9 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
     await importResolved(r); // atomar: bei Fehler bleibt das alte Projekt unverändert
     notesStore.replaceAll(r.notes);
     store.clear(); r.pads.forEach((p) => store.set(p.id, p));
-    banks = r.banks; current = 0; buffers.clear(); decodedBytes = 0; projectName = parsed.project.name; void preloadBank();
+    banks = r.banks; current = 0; groups = r.groups; buffers.clear(); decodedBytes = 0; projectName = parsed.project.name; void preloadBank();
     render();
-    say("Projekt importiert." + (r.warnings.length ? ` ${r.warnings.length} Pad(s) ohne Audiodatei.` : ""));
+    say("Projekt importiert." + (r.warnings.length ? ` ${r.warnings.length} Hinweis(e), z. B.: ${r.warnings[0]}.` : ""));
   } catch (err) {
     say(err instanceof ProjectError ? err.message : "Import fehlgeschlagen. Das aktuelle Projekt wurde nicht verändert.");
   }
@@ -407,6 +430,91 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pageshow", () => engine.gestureResume());
 
+const MODE_HELP: Record<PlayMode, string> = {
+  parallel: "Startet, ohne andere Pads zu stoppen. Mehrere Pads laufen gleichzeitig (Standard).",
+  stopSelected: "Stoppt beim Start nur die unten angekreuzten Pads, in allen Bänken. Alle anderen laufen weiter.",
+  group: "Stoppt beim Start alle laufenden Pads derselben Wiedergabegruppe. Andere Gruppen laufen weiter.",
+  stopOthers: "Vorsicht: Stoppt beim Start ALLE anderen laufenden Pads in allen Bänken.",
+};
+function updateBehaviorUI(): void {
+  const m = $<HTMLSelectElement>("fMode").value as PlayMode;
+  $("fModeHelp").textContent = MODE_HELP[m];
+  $("fTargetsRow").hidden = m !== "stopSelected";
+}
+function fillBehavior(p: PadConfig): void {
+  $<HTMLSelectElement>("fMode").value = p.playMode ?? "parallel";
+  const sel = $<HTMLSelectElement>("fGroup");
+  sel.replaceChildren(new Option("– keine Gruppe –", ""), ...groups.map((g) => new Option(g.name, g.id)));
+  sel.value = p.groupId ?? "";
+  const box = $("fTargets");
+  box.replaceChildren();
+  const chosen = new Set(p.stopTargets ?? []);
+  for (const b of banks) for (const q of makePads(b, store)) {
+    if (q.id === p.id || !q.soundId) continue; // nicht das Pad selbst, keine leeren Pads
+    const lab = document.createElement("label"); lab.className = "target";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = q.id; cb.checked = chosen.has(q.id);
+    lab.append(cb, document.createTextNode(`${b.name} – ${q.name || "(ohne Namen)"}`)); // Text, kein HTML
+    box.append(lab);
+  }
+  if (!box.children.length) box.textContent = "Keine anderen belegten Pads vorhanden.";
+  updateBehaviorUI();
+}
+$("fMode").addEventListener("change", updateBehaviorUI);
+
+const groupDialog = $<HTMLDialogElement>("groupDialog");
+async function persistGroups(): Promise<void> {
+  try { await saveGroups(groups); } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
+}
+function renderGroups(): void {
+  const list = $("groupList");
+  list.replaceChildren();
+  if (!groups.length) list.textContent = "Noch keine Gruppen.";
+  for (const g of groups) {
+    const used = [...store.values()].filter((p) => p.groupId === g.id).length;
+    const row = document.createElement("div"); row.className = "libRow";
+    const name = document.createElement("div"); name.className = "libName";
+    const b = document.createElement("b"); b.textContent = g.name;
+    const small = document.createElement("small"); small.textContent = `${used} Pad(s)`;
+    name.append(b, small);
+    const cross = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = g.crossBank;
+    cb.addEventListener("change", async () => { g.crossBank = cb.checked; await persistGroups(); });
+    cross.append(cb, document.createTextNode(" bankübergreifend"));
+    const mk = (label: string, fn: () => Promise<void>) => {
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "tab"; btn.textContent = label;
+      btn.addEventListener("click", () => void fn()); return btn;
+    };
+    row.append(name, cross,
+      mk("Umbenennen", async () => {
+        const n = prompt("Neuer Name der Gruppe:", g.name)?.trim();
+        if (!n || n.length > 60) return;
+        g.name = n; await persistGroups(); renderGroups();
+      }),
+      mk("Löschen", async () => {
+        if (!confirm(`Gruppe „${g.name}“ löschen? ${used} Pad(s) verlieren die Zuordnung. Laufende Sounds werden nicht gestoppt.`)) return;
+        for (const p of store.values()) if (p.groupId === g.id) { p.groupId = undefined; try { await savePad(p); } catch { say("Speichern fehlgeschlagen."); } }
+        groups = groups.filter((x) => x.id !== g.id);
+        await persistGroups(); renderGroups();
+      }));
+    list.append(row);
+  }
+}
+$("pGroups").addEventListener("click", () => { groupDialog.showModal(); renderGroups(); });
+$("groupClose").addEventListener("click", () => groupDialog.close());
+$("groupAdd").addEventListener("click", async () => {
+  const n = prompt("Name der neuen Gruppe (z. B. Intros):")?.trim();
+  if (!n) return;
+  if (n.length > 60) { say("Der Gruppenname ist zu lang (höchstens 60 Zeichen)."); return; }
+  groups.push({ id: uuid(), name: n, crossBank: false });
+  await persistGroups(); renderGroups();
+});
+
+function showVolume(): void { $("fVolPct").textContent = volumePercent(Number($<HTMLInputElement>("fVol").value)); }
+$("fVol").addEventListener("input", () => {
+  showVolume();
+  if (editing) engine.setVolume(editing.id, Number($<HTMLInputElement>("fVol").value)); // laufendes Pad hörbar anpassen
+});
+
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");
 
@@ -476,6 +584,7 @@ async function start(): Promise<void> {
     banks = [{ id: "bank-1", name: "Bank 1", columns: 4, padCount: 12 }];
     await saveBanks(banks);
   }
+  try { groups = await loadGroups(); } catch { say("Gruppen konnten nicht geladen werden."); }
   try { await notesStore.load(); } catch { say("Notizen konnten nicht geladen werden."); }
   for (const p of savedPads) store.set(p.id, p);
   for (const { oldId, pad } of migrateLegacy(savedPads, banks[0].id)) { // Übernahme aus M1

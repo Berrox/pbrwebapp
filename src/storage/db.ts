@@ -1,7 +1,7 @@
 import { openDB, type DBSchema } from "idb";
 import { contentHash, uuid } from "../model/ids";
 
-export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob }
+export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob; duration?: number }
 export interface PadConfig {
   id: string; name: string; color: string; volume: number; loop: boolean; soundId: string | null;
   start?: number; end?: number; // Schnitt in Sekunden (nicht destruktiv); leer = ganzes Sample
@@ -25,13 +25,13 @@ const dbPromise = openDB<SamplerDB>("sampler", 2, {
 });
 
 /** Speichert eine Datei; erkennt Duplikate per Prüfsumme. Gibt die Sound-ID zurück. */
-export async function importSound(file: File, data: ArrayBuffer): Promise<string> {
+export async function importSound(file: File, data: ArrayBuffer, duration?: number): Promise<string> {
   const db = await dbPromise;
   const hash = await contentHash(data);
   const existing = await db.getFromIndex("sounds", "hash", hash);
   if (existing) return existing.id;
   const id = uuid();
-  await db.put("sounds", { id, name: file.name, hash, size: file.size, blob: new Blob([data], { type: file.type }) });
+  await db.put("sounds", { id, name: file.name, hash, size: file.size, blob: new Blob([data], { type: file.type }), duration });
   return id;
 }
 export async function getSound(id: string): Promise<StoredSound | undefined> {
@@ -54,6 +54,26 @@ export async function replaceAllData(d: {
   d.sounds.forEach((s) => jobs.push(tx.objectStore("sounds").put(s)));
   await Promise.all([...jobs, tx.done]);
 }
+export type SoundInfo = Omit<StoredSound, "blob">;
+/** Liste ohne die Audiodaten selbst, damit nicht alles im Speicher liegt. */
+export async function listSounds(): Promise<SoundInfo[]> {
+  const db = await dbPromise;
+  const out: SoundInfo[] = [];
+  let c = await db.transaction("sounds").store.openCursor();
+  while (c) { const { blob: _unused, ...info } = c.value; out.push(info); c = await c.continue(); }
+  return out.sort((a, b) => a.name.localeCompare(b.name, "de"));
+}
+export async function renameSound(id: string, name: string): Promise<void> {
+  const db = await dbPromise;
+  const s = await db.get("sounds", id);
+  if (s) await db.put("sounds", { ...s, name });
+}
+export async function setSoundDuration(id: string, duration: number): Promise<void> {
+  const db = await dbPromise;
+  const s = await db.get("sounds", id);
+  if (s) await db.put("sounds", { ...s, duration });
+}
+export async function deleteSound(id: string): Promise<void> { await (await dbPromise).delete("sounds", id); }
 export async function deletePad(id: string): Promise<void> { await (await dbPromise).delete("pads", id); }
 export async function loadBanks(): Promise<StoredBank[]> {
   return (await (await dbPromise).getAll("banks")).sort((a, b) => a.order - b.order);

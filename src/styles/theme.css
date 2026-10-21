@@ -66,3 +66,10 @@ dialog input:not([type=checkbox]):not([type=range]) { width: 100%; padding: 8px;
 .pad small { display: block; font-size: 0.8rem; font-weight: 400; opacity: 0.9; }
 .learn { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #midiState { color: var(--muted); font-size: 0.85rem; }
+#libraryDialog { min-width: min(680px, 96vw); }
+#libList { max-height: 50vh; overflow: auto; margin-bottom: 12px; }
+.libRow { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #343741; flex-wrap: wrap; }
+.libName { flex: 1; min-width: 200px; }
+.libName b { word-break: break-all; }
+.libName small { display: block; color: var(--muted); }
+dialog select { width: 100%; padding: 8px; font-size: 1rem; }

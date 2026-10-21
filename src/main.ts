@@ -1,11 +1,12 @@
 import "./styles/theme.css";
 import { AudioEngine } from "./audio/AudioEngine";
 import {
-  deleteBankData, deletePad, getSound, importSound, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
+  deleteBankData, deletePad, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
 import { findConflict, isAssignableKey, keyLabel } from "./model/keys";
 import { midiSupported, noteName, startMidi } from "./input/midi";
+import { formatDuration, formatSize, isSupportedAudioName, isValidSoundName, padsUsingSound } from "./model/library";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
@@ -90,6 +91,43 @@ async function onPad(p: PadConfig): Promise<void> {
   engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
 }
 
+const soundNames = new Map<string, string>();
+async function fillLibrarySelect(p: PadConfig): Promise<void> {
+  const sel = $<HTMLSelectElement>("fLibrary");
+  sel.replaceChildren(new Option("– keine Änderung –", "")); // Option setzt Text sicher, kein HTML
+  try {
+    for (const s of await listSounds()) {
+      soundNames.set(s.id, s.name);
+      sel.append(new Option(s.name + (s.id === p.soundId ? " (aktuell)" : ""), s.id));
+    }
+  } catch { /* Bibliothek nicht lesbar: Auswahl bleibt leer */ }
+}
+
+/** Prüft die Datei (muss dekodierbar sein), speichert sie und gibt die Sound-ID zurück. */
+async function importToLibrary(file: File): Promise<string | null> {
+  let data: ArrayBuffer, buf: AudioBuffer;
+  try {
+    data = await file.arrayBuffer();
+    buf = await engine.decode(data.slice(0));
+  } catch { say(`„${file.name}“ kann nicht gelesen werden. Bitte WAV oder MP3 verwenden.`); return null; }
+  try {
+    const id = await importSound(file, data, buf.duration);
+    buffers.set(id, buf);
+    return id;
+  } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); return null; }
+}
+async function importMany(files: File[]): Promise<void> {
+  const audio = files.filter((f) => isSupportedAudioName(f.name));
+  if (!audio.length) { say("Keine WAV- oder MP3-Dateien gefunden."); return; }
+  const failed: string[] = [];
+  for (const [i, f] of audio.entries()) {
+    say(`Importiere ${i + 1} von ${audio.length} …`);
+    if (!(await importToLibrary(f))) failed.push(f.name);
+  }
+  say(`${audio.length - failed.length} von ${audio.length} Sound(s) importiert.` + (failed.length ? ` Nicht lesbar: ${failed.join(", ")}` : ""));
+  if (libDialog.open) await renderLibrary();
+}
+
 function refreshLearn(): void {
   $("fKeyLabel").textContent = learning === "key" ? "Taste drücken …" : pendingKey ? keyLabel(pendingKey) : "–";
   $("fMidiLabel").textContent = learning === "midi" ? "Note spielen …"
@@ -105,6 +143,7 @@ function openDialog(p: PadConfig): void {
   $<HTMLInputElement>("fFile").value = "";
   pendingKey = p.key; pendingMidi = p.midiNote; learning = null; refreshLearn();
   $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
+  void fillLibrarySelect(p);
   dialog.showModal();
 }
 
@@ -129,16 +168,14 @@ dialog.addEventListener("close", async () => {
     if (mc) conflictMsg += `MIDI-Note ${pendingMidi} ist schon an „${mc.name || "Pad"}“ vergeben und wurde nicht übernommen.`;
     else p.midiNote = pendingMidi;
     const file = $<HTMLInputElement>("fFile").files?.[0];
-    if (file) {
-      try {
-        const data = await file.arrayBuffer();
-        await engine.decode(data.slice(0)); // Prüfung: Datei muss dekodierbar sein
-        p.soundId = await importSound(file, data);
-        p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
-        if (!p.name) p.name = file.name.replace(/\.[^.]+$/, "");
-      } catch {
-        say("Diese Datei kann nicht gelesen werden. Bitte WAV oder MP3 verwenden.");
-      }
+    const libId = $<HTMLSelectElement>("fLibrary").value;
+    let newId: string | null = null, newName = "";
+    if (file) { newId = await importToLibrary(file); newName = file.name; }
+    else if (libId && libId !== p.soundId) { newId = libId; newName = soundNames.get(libId) ?? ""; }
+    if (newId) {
+      p.soundId = newId;
+      p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
+      if (!p.name) p.name = newName.replace(/\.[^.]+$/, "");
     }
   } else { render(); return; }
   try { await savePad(p); say(conflictMsg || "Gespeichert."); }
@@ -242,6 +279,80 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
   } catch (err) {
     say(err instanceof ProjectError ? err.message : "Import fehlgeschlagen. Das aktuelle Projekt wurde nicht verändert.");
   }
+});
+
+const libDialog = $<HTMLDialogElement>("libraryDialog");
+async function renderLibrary(): Promise<void> {
+  const list = $("libList");
+  let sounds = await listSounds();
+  for (const s of sounds) { // fehlende Dauer einmalig nachtragen
+    if (s.duration === undefined) {
+      say("Lese Dauer …");
+      const buf = await bufferFor(s.id);
+      if (buf) { s.duration = buf.duration; await setSoundDuration(s.id, buf.duration); }
+    }
+  }
+  sounds = sounds.slice();
+  list.replaceChildren();
+  if (!sounds.length) { list.textContent = "Noch keine Sounds importiert."; return; }
+  for (const s of sounds) {
+    const used = padsUsingSound(store, s.id);
+    const row = document.createElement("div"); row.className = "libRow";
+    const name = document.createElement("div"); name.className = "libName";
+    const b = document.createElement("b"); b.textContent = s.name;
+    const small = document.createElement("small");
+    small.textContent = `${formatSize(s.size)} · ${formatDuration(s.duration)} · ` + (used.length ? `verwendet von ${used.length} Pad(s)` : "nicht verwendet");
+    name.append(b, small);
+    const mk = (label: string, fn: () => Promise<void>) => {
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "tab"; btn.textContent = label;
+      btn.addEventListener("click", () => void fn()); return btn;
+    };
+    row.append(name,
+      mk("▶ Hören", async () => {
+        if (engine.isPlaying("__preview__")) { engine.stop("__preview__"); return; }
+        await engine.unlock();
+        const buf = await bufferFor(s.id);
+        if (buf) engine.play("__preview__", buf, { volume: 0.9, loop: false }); else say("Audiodatei defekt.");
+      }),
+      mk("Umbenennen", async () => {
+        const n = prompt("Neuer Name:", s.name);
+        if (n === null) return;
+        if (!isValidSoundName(n)) { say("Der Name darf nicht leer sein."); return; }
+        try { await renameSound(s.id, n.trim()); } catch { say("Umbenennen fehlgeschlagen."); }
+        await renderLibrary();
+      }),
+      mk("Löschen", async () => {
+        const msg = used.length
+          ? `„${s.name}“ wird von ${used.length} Pad(s) verwendet. Wirklich löschen? Diese Pads werden leer.`
+          : `„${s.name}“ aus der Bibliothek löschen?`;
+        if (!confirm(msg)) return;
+        try {
+          for (const p of used) { engine.stop(p.id); p.soundId = null; p.start = undefined; p.end = undefined; await savePad(p); }
+          await deleteSound(s.id);
+          buffers.delete(s.id);
+        } catch { say("Löschen fehlgeschlagen."); }
+        render(); await renderLibrary();
+      }));
+    list.append(row);
+  }
+  say(`${sounds.length} Sound(s) in der Bibliothek.`);
+}
+$("pLibrary").addEventListener("click", async () => { libDialog.showModal(); await renderLibrary(); });
+$("libClose").addEventListener("click", () => libDialog.close());
+libDialog.addEventListener("close", () => engine.stop("__preview__"));
+$("libImport").addEventListener("click", () => $<HTMLInputElement>("libFiles").click());
+$<HTMLInputElement>("libFiles").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  input.value = "";
+  await importMany(files);
+});
+// Drag-and-drop: immer abfangen, sonst öffnet der Browser die Datei und verlässt die App.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  if (!editMode) { say("Zum Importieren zuerst in den Bearbeiten-Modus wechseln."); return; }
+  await importMany([...(e.dataTransfer?.files ?? [])]);
 });
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });

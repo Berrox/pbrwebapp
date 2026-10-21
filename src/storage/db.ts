@@ -1,5 +1,6 @@
 import { openDB, type DBSchema } from "idb";
 import { contentHash, uuid } from "../model/ids";
+import type { Note } from "../model/notes";
 
 export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob; duration?: number }
 export interface PadConfig {
@@ -8,19 +9,22 @@ export interface PadConfig {
   key?: string; midiNote?: number; // Tastaturkürzel (event.code) und MIDI-Note, optional
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
+export interface StoredNote extends Note { order: number }
 interface SamplerDB extends DBSchema {
+  notes: { key: string; value: StoredNote };
   banks: { key: string; value: StoredBank };
   sounds: { key: string; value: StoredSound; indexes: { hash: string } };
   pads: { key: string; value: PadConfig };
 }
 
-const dbPromise = openDB<SamplerDB>("sampler", 2, {
+const dbPromise = openDB<SamplerDB>("sampler", 3, {
   upgrade(db, oldVersion) {
     if (oldVersion < 1) {
       db.createObjectStore("sounds", { keyPath: "id" }).createIndex("hash", "hash");
       db.createObjectStore("pads", { keyPath: "id" });
     }
     if (oldVersion < 2) db.createObjectStore("banks", { keyPath: "id" });
+    if (oldVersion < 3) db.createObjectStore("notes", { keyPath: "id" });
   },
 });
 
@@ -42,16 +46,17 @@ export async function loadPads(): Promise<PadConfig[]> { return (await dbPromise
 export async function loadAllSounds(): Promise<StoredSound[]> { return (await dbPromise).getAll("sounds"); }
 /** Ersetzt das gesamte Projekt in EINER Transaktion: entweder alles oder (bei Fehler) nichts. */
 export async function replaceAllData(d: {
-  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[];
+  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[]; notes: Note[];
 }): Promise<void> {
   const db = await dbPromise;
-  const tx = db.transaction(["banks", "pads", "sounds"], "readwrite");
+  const tx = db.transaction(["banks", "pads", "sounds", "notes"], "readwrite");
   const jobs: Promise<unknown>[] = [
-    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(),
+    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(), tx.objectStore("notes").clear(),
   ];
   d.banks.forEach((b, order) => jobs.push(tx.objectStore("banks").put({ ...b, order })));
   d.pads.forEach((p) => jobs.push(tx.objectStore("pads").put(p)));
   d.sounds.forEach((s) => jobs.push(tx.objectStore("sounds").put(s)));
+  d.notes.forEach((n, order) => jobs.push(tx.objectStore("notes").put({ ...n, order })));
   await Promise.all([...jobs, tx.done]);
 }
 export type SoundInfo = Omit<StoredSound, "blob">;
@@ -74,6 +79,16 @@ export async function setSoundDuration(id: string, duration: number): Promise<vo
   if (s) await db.put("sounds", { ...s, duration });
 }
 export async function deleteSound(id: string): Promise<void> { await (await dbPromise).delete("sounds", id); }
+export async function loadNotes(): Promise<Note[]> {
+  const all = await (await dbPromise).getAll("notes");
+  return all.sort((a, b) => a.order - b.order).map(({ order: _order, ...n }) => n);
+}
+export async function saveNote(n: Note, order: number): Promise<void> { await (await dbPromise).put("notes", { ...n, order }); }
+export async function saveNoteOrder(notes: Note[]): Promise<void> {
+  const tx = (await dbPromise).transaction("notes", "readwrite");
+  await Promise.all([...notes.map((n, order) => tx.store.put({ ...n, order })), tx.done]);
+}
+export async function deleteNote(id: string): Promise<void> { await (await dbPromise).delete("notes", id); }
 export async function deletePad(id: string): Promise<void> { await (await dbPromise).delete("pads", id); }
 export async function loadBanks(): Promise<StoredBank[]> {
   return (await (await dbPromise).getAll("banks")).sort((a, b) => a.order - b.order);

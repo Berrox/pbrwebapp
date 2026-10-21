@@ -28,3 +28,6 @@ Ein Projekt ist eine ZIP-Datei:
 
 ## Nachtrag (M6)
 Pads können zusätzlich `"key"` (Tastencode, z. B. `KeyQ`) und `"midiNote"` (0–127) enthalten. Beide sind optional, die Formatversion bleibt 1. Ältere App-Versionen ignorieren die Felder.
+
+## Nachtrag (Notizen, Version 2)
+Neues optionales Feld `"notes": [{ "id": "…", "title": "…", "text": "…" }]`. Die Reihenfolge im Array ist die Reihenfolge in der App. Die App schreibt ab jetzt `"version": 2`. Version 1 wird weiter gelesen (dann ohne Notizen). Ältere App-Versionen lehnen Version 2 mit dem Hinweis auf eine neuere Version ab.

@@ -1,12 +1,15 @@
 import "./styles/theme.css";
 import { AudioEngine } from "./audio/AudioEngine";
 import {
-  deleteBankData, deletePad, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
+  deleteBankData, deleteNote, deletePad, loadNotes, saveNote, saveNoteOrder, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
 import { findConflict, isAssignableKey, keyLabel } from "./model/keys";
 import { midiSupported, noteName, startMidi } from "./input/midi";
 import { formatDuration, formatSize, isSupportedAudioName, isValidSoundName, padsUsingSound } from "./model/library";
+import { NotesStore } from "./model/notes";
+import { mountNotes } from "./ui/NotesPanel";
+import { AUDIO_ACCEPT } from "./model/audioFormats";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
@@ -28,6 +31,12 @@ let learning: "key" | "midi" | null = null; // wartet gerade auf Tastendruck bzw
 let pendingKey: string | undefined;
 let pendingMidi: number | undefined;
 
+const notesStore = new NotesStore({ loadAll: loadNotes, save: saveNote, saveOrder: saveNoteOrder, remove: deleteNote });
+const notesUI = mountNotes({
+  store: notesStore, panel: $("notes"), list: $("notesList"), status: $("notesStatus"),
+  addBtn: $<HTMLButtonElement>("noteAdd"), toggle: $<HTMLButtonElement>("notesBtn"),
+});
+
 const cur = (): Bank => banks[current];
 function say(msg: string): void { status.textContent = msg; }
 
@@ -35,16 +44,29 @@ async function persistBanks(): Promise<void> {
   try { await saveBanks(banks); } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
 }
 
-async function bufferFor(soundId: string): Promise<AudioBuffer | null> {
+const pendingDecodes = new Map<string, Promise<AudioBuffer | null>>();
+const loading = new Set<string>(); // Pads, die gerade geladen werden (verhindert Doppelstart bei schnellem Zweittipp)
+let decodedBytes = 0;
+const DECODE_BUDGET = 150 * 1024 * 1024; // Obergrenze fürs Vorladen (iPad-Speicher ist begrenzt)
+
+/** Dekodiert einen Sound höchstens einmal, auch wenn mehrere Aufrufer gleichzeitig danach fragen. */
+function bufferFor(soundId: string): Promise<AudioBuffer | null> {
   const cached = buffers.get(soundId);
-  if (cached) return cached;
-  const s = await getSound(soundId);
-  if (!s) return null;
-  try {
-    const buf = await engine.decode(await s.blob.arrayBuffer());
-    buffers.set(soundId, buf);
-    return buf;
-  } catch { return null; }
+  if (cached) return Promise.resolve(cached);
+  let p = pendingDecodes.get(soundId);
+  if (!p) {
+    p = (async () => {
+      try {
+        const s = await getSound(soundId);
+        if (!s) return null;
+        const buf = await engine.decode(await s.blob.arrayBuffer());
+        buffers.set(soundId, buf);
+        return buf;
+      } catch { return null; } finally { pendingDecodes.delete(soundId); }
+    })();
+    pendingDecodes.set(soundId, p);
+  }
+  return p;
 }
 
 function renderTabs(): void {
@@ -56,7 +78,7 @@ function renderTabs(): void {
     t.className = "tab" + (i === current ? " active" : "");
     const running = playing.some((id) => id.startsWith(padPrefix(b.id)));
     t.textContent = (running ? "● " : "") + b.name; // textContent: kein HTML aus Namen
-    t.addEventListener("pointerdown", (e) => { e.preventDefault(); current = i; render(); }); // stoppt nichts
+    t.addEventListener("pointerdown", (e) => { e.preventDefault(); current = i; render(); void preloadBank(); }); // stoppt nichts
     tabs.append(t);
   });
   $<HTMLInputElement>("bCols").value = String(cur().columns);
@@ -81,14 +103,20 @@ function renderGrid(): void {
 function render(): void { renderTabs(); renderGrid(); }
 
 async function onPad(p: PadConfig): Promise<void> {
-  await engine.unlock();
+  engine.unlock(); // wartet nicht (iOS)
   const action = padAction(editMode ? "edit" : "live", !!p.soundId, engine.isPlaying(p.id));
   if (action === "edit") { openDialog(p); return; }
   if (action === "ignore") return; // leere Pads: keine Reaktion, keine Fehlermeldung
   if (action === "stop") { engine.stop(p.id); return; }
-  const buf = await bufferFor(p.soundId);
-  if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
-  engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
+  if (!p.soundId || loading.has(p.id)) return; // lädt schon: weitere Taps ignorieren
+  loading.add(p.id);
+  try {
+    if (!buffers.has(p.soundId)) say("Lade Sound …");
+    const buf = await bufferFor(p.soundId);
+    if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
+    engine.play(p.id, buf, { volume: p.volume, loop: p.loop, start: p.start, end: p.end });
+    if (!engine.running) say("Audio wird reaktiviert … (Display einmal berühren, falls nichts zu hören ist)");
+  } finally { loading.delete(p.id); }
 }
 
 const soundNames = new Map<string, string>();
@@ -109,7 +137,7 @@ async function importToLibrary(file: File): Promise<string | null> {
   try {
     data = await file.arrayBuffer();
     buf = await engine.decode(data.slice(0));
-  } catch { say(`„${file.name}“ kann nicht gelesen werden. Bitte WAV oder MP3 verwenden.`); return null; }
+  } catch { say(`„${file.name}“ kann auf diesem Gerät nicht gelesen werden (Format nicht unterstützt oder Datei beschädigt). WAV und MP3 funktionieren überall.`); return null; }
   try {
     const id = await importSound(file, data, buf.duration);
     buffers.set(id, buf);
@@ -117,8 +145,8 @@ async function importToLibrary(file: File): Promise<string | null> {
   } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); return null; }
 }
 async function importMany(files: File[]): Promise<void> {
-  const audio = files.filter((f) => isSupportedAudioName(f.name));
-  if (!audio.length) { say("Keine WAV- oder MP3-Dateien gefunden."); return; }
+  const audio = files.filter((f) => isSupportedAudioName(f.name) || f.type.startsWith("audio/"));
+  if (!audio.length) { say("Keine unterstützten Audiodateien gefunden."); return; }
   const failed: string[] = [];
   for (const [i, f] of audio.entries()) {
     say(`Importiere ${i + 1} von ${audio.length} …`);
@@ -247,7 +275,7 @@ $("pExport").addEventListener("click", async () => {
   projectName = name;
   try {
     say("Erzeuge ZIP …");
-    const bytes = await exportProject(name, banks, store);
+    const bytes = await exportProject(name, banks, store, notesStore.notes);
     const url = URL.createObjectURL(toBlob(bytes, "application/zip"));
     const a = document.createElement("a");
     a.href = url; a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
@@ -271,9 +299,11 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
       + "\n\nDas aktuelle Projekt wird ERSETZT. Tipp: vorher exportieren.";
     if (!confirm(msg)) { say("Import abgebrochen."); return; }
     engine.stopAll();
+    await notesStore.flush();
     await importResolved(r); // atomar: bei Fehler bleibt das alte Projekt unverändert
+    notesStore.replaceAll(r.notes);
     store.clear(); r.pads.forEach((p) => store.set(p.id, p));
-    banks = r.banks; current = 0; buffers.clear(); projectName = parsed.project.name;
+    banks = r.banks; current = 0; buffers.clear(); decodedBytes = 0; projectName = parsed.project.name; void preloadBank();
     render();
     say("Projekt importiert." + (r.warnings.length ? ` ${r.warnings.length} Pad(s) ohne Audiodatei.` : ""));
   } catch (err) {
@@ -355,6 +385,28 @@ window.addEventListener("drop", async (e) => {
   await importMany([...(e.dataTransfer?.files ?? [])]);
 });
 
+/** Lädt die Sounds der aktuellen Bank im Hintergrund vor, damit der erste Tipp ohne Wartezeit spielt. */
+async function preloadBank(): Promise<void> {
+  const ids = new Set(makePads(cur(), store).map((p) => p.soundId).filter((x): x is string => !!x));
+  for (const id of ids) {
+    if (buffers.has(id)) continue;
+    if (decodedBytes > DECODE_BUDGET) break; // Rest wird erst beim Antippen geladen
+    const b = await bufferFor(id);
+    if (b) decodedBytes += b.length * b.numberOfChannels * 4;
+  }
+}
+// Nach Standby: Audio bei jeder Berührung/Taste (auch beim Loslassen) wieder aufwecken.
+for (const ev of ["touchend", "pointerup", "click", "keydown"]) {
+  document.addEventListener(ev, () => {
+    engine.gestureResume();
+    setTimeout(() => { if (engine.running && status.textContent?.startsWith("Audio wird")) say(""); }, 400);
+  }, { capture: true, passive: true });
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") { engine.gestureResume(); void preloadBank(); }
+});
+window.addEventListener("pageshow", () => engine.gestureResume());
+
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");
 
@@ -364,6 +416,7 @@ function setMode(edit: boolean): void {
   modeBtn.textContent = edit ? "✎ BEARBEITEN – tippen für LIVE" : "🔒 LIVE – tippen zum Bearbeiten";
   $("bankTools").hidden = !edit;
   $("projectTools").hidden = !edit;
+  notesUI.setEditable(edit); // im Live-Modus sind Notizen nur lesbar
   try { localStorage.setItem("sampler.mode", edit ? "edit" : "live"); } catch { /* egal */ }
   render();
 }
@@ -423,6 +476,7 @@ async function start(): Promise<void> {
     banks = [{ id: "bank-1", name: "Bank 1", columns: 4, padCount: 12 }];
     await saveBanks(banks);
   }
+  try { await notesStore.load(); } catch { say("Notizen konnten nicht geladen werden."); }
   for (const p of savedPads) store.set(p.id, p);
   for (const { oldId, pad } of migrateLegacy(savedPads, banks[0].id)) { // Übernahme aus M1
     store.delete(oldId); store.set(pad.id, pad);
@@ -434,6 +488,9 @@ async function start(): Promise<void> {
   setMode(saved !== "live"); // nach einem Neuladen im Live-Modus bleibt die Sperre aktiv
   say(editMode ? "Bereit. Pad antippen zum Belegen." : "Bereit. LIVE-Modus.");
   void setupOffline($("offlineState"));
+  $<HTMLInputElement>("fFile").accept = AUDIO_ACCEPT;
+  $<HTMLInputElement>("libFiles").accept = AUDIO_ACCEPT;
+  void preloadBank();
   $("midiState").textContent = midiSupported() ? "MIDI aus" : "MIDI nicht verfügbar in diesem Browser";
   if (midiSupported() && [...store.values()].some((p) => p.midiNote !== undefined)) void ensureMidi();
 }

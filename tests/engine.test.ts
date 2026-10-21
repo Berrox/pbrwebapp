@@ -14,8 +14,10 @@ class MockSource {
 }
 let sources: MockSource[]; let gains: MockGain[];
 class MockCtx {
-  state = "running"; currentTime = 0; destination = {};
-  resume() { return Promise.resolve(); }
+  static last: MockCtx;
+  state = "running"; currentTime = 0; destination = {}; resumeCalls = 0; hang = false;
+  constructor() { MockCtx.last = this; }
+  resume() { this.resumeCalls++; return this.hang ? new Promise<void>(() => {}) : Promise.resolve(); }
   createBufferSource() { const s = new MockSource(); sources.push(s); return s; }
   createGain() { const g = new MockGain(); gains.push(g); return g; }
 }
@@ -103,6 +105,33 @@ describe("AudioEngine", () => {
       engine.play("__preview__", buf10, { volume: 1, loop: false, start: 1, end: 2 });
       engine.stopAll();
       expect(engine.isPlaying("__preview__")).toBe(false);
+    });
+  });
+  describe("Standby und Wiederaufnahme (iOS)", () => {
+    it("unlock wartet nicht auf ein hängendes resume()", () => {
+      engine.unlock();
+      const ctx = MockCtx.last;
+      ctx.state = "interrupted"; ctx.hang = true;
+      engine.unlock(); // kehrt sofort zurück, obwohl resume() nie fertig wird
+      expect(ctx.resumeCalls).toBe(1);
+      expect(engine.running).toBe(false);
+    });
+    it("gestureResume setzt nur fort, wenn der Kontext nicht läuft", () => {
+      engine.unlock();
+      const ctx = MockCtx.last;
+      engine.gestureResume();
+      expect(ctx.resumeCalls).toBe(0);
+      ctx.state = "interrupted";
+      engine.gestureResume();
+      expect(ctx.resumeCalls).toBe(1);
+    });
+    it("play auf nicht laufendem Kontext merkt das Pad vor und fordert resume an", () => {
+      engine.unlock();
+      const ctx = MockCtx.last;
+      ctx.state = "suspended";
+      engine.play("a", {} as AudioBuffer, { volume: 1, loop: false });
+      expect(ctx.resumeCalls).toBeGreaterThan(0);
+      expect(engine.isPlaying("a")).toBe(true);
     });
   });
 });

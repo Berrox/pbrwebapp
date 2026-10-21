@@ -1,7 +1,8 @@
 // Reine Hilfsfunktionen für die Soundbibliothek.
 import type { PadConfig } from "../storage/db";
+import { audioExtension } from "./audioFormats";
 
-export const isSupportedAudioName = (name: string): boolean => /\.(wav|mp3)$/i.test(name);
+export const isSupportedAudioName = (name: string): boolean => audioExtension(name) !== null;
 export const isValidSoundName = (name: string): boolean => name.trim().length >= 1 && name.trim().length <= 200;
 
 export function formatSize(bytes: number): string {

@@ -3,16 +3,18 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import type { PadConfig } from "../storage/db";
 import { padId, type Bank } from "./banks";
 import { isAssignableKey } from "./keys";
+import { audioExtension, audioMime } from "./audioFormats";
+import { MAX_NOTES, NOTE_TEXT_MAX, NOTE_TITLE_MAX, type Note } from "./notes";
 
 export const FORMAT_NAME = "sampler-project";
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2; // 2: Notizen. Version 1 bleibt importierbar (ohne Notizen).
 const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
 export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number }
 export interface BankEntry { id: string; name: string; columns: number; padCount: number; pads: PadEntry[] }
 export interface SoundEntry { id: string; name: string; file: string }
-export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[] }
+export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[] }
 export interface ParsedProject { project: ProjectFile; audio: Map<string, Uint8Array>; missingSounds: string[] }
 
 export class ProjectError extends Error {}
@@ -78,18 +80,29 @@ export function validateProject(raw: unknown): ProjectFile {
     soundIds.add(id);
     return { id, name: str(s.name, 200, "ein Dateiname"), file };
   });
-  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds };
+  const rawNotes = raw.notes === undefined ? [] : raw.notes; // ältere Projekte haben keine Notizen
+  if (!Array.isArray(rawNotes) || rawNotes.length > MAX_NOTES) fail("Das Projekt ist beschädigt: Notizen ungültig.");
+  const noteIds = new Set<string>();
+  const notes = rawNotes.map((n: unknown): Note => {
+    if (!isObj(n)) fail("Das Projekt ist beschädigt: Notiz ungültig.");
+    const id = str(n.id, 64, "eine Notiz-ID");
+    if (!SAFE_ID.test(id) || noteIds.has(id)) fail("Das Projekt ist beschädigt: Notiz-ID ungültig.");
+    noteIds.add(id);
+    return { id, title: str(n.title, NOTE_TITLE_MAX, "ein Notiztitel"), text: str(n.text, NOTE_TEXT_MAX, "ein Notiztext") };
+  });
+  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds, notes };
 }
 
 export function buildProjectZip(
-  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[],
+  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[], notes: Note[] = [],
 ): Uint8Array {
   const soundEntries: SoundEntry[] = sounds.map((s) => ({
-    id: s.id, name: s.name, file: `audio/${s.id}${/\.(wav|mp3)$/i.exec(s.name)?.[0].toLowerCase() ?? ".bin"}`,
+    id: s.id, name: s.name, file: `audio/${s.id}.${audioExtension(s.name) ?? "bin"}`,
   }));
   const project: ProjectFile = {
     format: FORMAT_NAME, version: FORMAT_VERSION, name, exportedAt: new Date().toISOString(),
     sounds: soundEntries,
+    notes: notes.map(({ id, title, text }) => ({ id, title, text })), // Reihenfolge = Reihenfolge in der Liste
     banks: banks.map((b) => ({
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount,
       pads: Array.from({ length: b.padCount }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
@@ -135,7 +148,7 @@ export function parseProjectZip(bytes: Uint8Array): ParsedProject {
 }
 
 export interface ResolvedImport {
-  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[];
+  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[]; notes: Note[];
 }
 /** Wandelt das geprüfte Projekt in App-Daten um. Pads mit fehlender Audiodatei werden leer markiert. */
 export function resolveImport(parsed: ParsedProject): ResolvedImport {
@@ -150,7 +163,7 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
   });
   const sounds = parsed.project.sounds.filter((s) => parsed.audio.has(s.id)).map((s) => ({
     id: s.id, name: s.name, bytes: parsed.audio.get(s.id)!,
-    mime: /\.wav$/i.test(s.name) ? "audio/wav" : /\.mp3$/i.test(s.name) ? "audio/mpeg" : "application/octet-stream",
+    mime: audioMime(s.name),
   }));
-  return { banks, pads, sounds, warnings };
+  return { banks, pads, sounds, warnings, notes: parsed.project.notes };
 }

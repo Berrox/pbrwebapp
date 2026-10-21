@@ -73,3 +73,24 @@ dialog input:not([type=checkbox]):not([type=range]) { width: 100%; padding: 8px;
 .libName b { word-break: break-all; }
 .libName small { display: block; color: var(--muted); }
 dialog select { width: 100%; padding: 8px; font-size: 1rem; }
+#work { flex: 1; display: flex; min-height: 0; min-width: 0; }
+#notesBtn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+#notes { width: min(360px, 36vw); display: flex; flex-direction: column; min-height: 0; background: var(--panel); margin: 10px 10px 10px 0; border-radius: var(--radius); padding: 10px; }
+#notes[hidden] { display: none; }
+.notesHead { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+#notesStatus { flex: 1; color: var(--muted); font-size: 0.85rem; }
+#notesStatus.error { color: #f87171; }
+#notesList { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.note { background: #14151a; border-radius: 10px; padding: 8px; }
+.noteHead { display: flex; gap: 6px; margin-bottom: 6px; }
+.noteTools { display: flex; gap: 4px; }
+.noteTools .tab { padding: 8px 12px; min-height: 44px; }
+.note input, .note textarea { width: 100%; background: #0e0f12; color: var(--text); border: 1px solid #343741; border-radius: 8px; padding: 10px; font: inherit; font-size: 1.05rem; line-height: 1.4; -webkit-user-select: text; user-select: text; }
+.note input { font-weight: 700; min-width: 0; flex: 1; }
+.note textarea { min-height: 8rem; resize: vertical; }
+.ro .noteTools { display: none; }
+.ro input, .ro textarea { border-color: transparent; }
+@media (max-width: 900px) {
+  #work { flex-direction: column; }
+  #notes { width: auto; max-height: 40vh; margin: 0 10px 10px; }
+}

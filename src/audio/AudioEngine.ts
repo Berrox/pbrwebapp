@@ -16,11 +16,16 @@ export class AudioEngine {
     if (!this.ctx) this.ctx = new AudioContext();
     return this.ctx;
   }
-  /** Muss aus einer Benutzeraktion (Tippen/Klick) aufgerufen werden. */
-  async unlock(): Promise<void> {
+  /** Aus einer Benutzeraktion aufrufen. Wartet bewusst nicht: auf iOS kann resume() lange hängen. */
+  unlock(): void {
     const c = this.getCtx();
-    if (c.state !== "running") await c.resume();
+    if (c.state !== "running") void c.resume().catch(() => { /* wird beim nächsten Tippen erneut versucht */ });
   }
+  /** Bei jeder Berührung/Taste aufrufen: iOS erlaubt das Fortsetzen nach Standby oft erst bei touchend/click. */
+  gestureResume(): void {
+    if (this.ctx && this.ctx.state !== "running") void this.ctx.resume().catch(() => { /* egal */ });
+  }
+  get running(): boolean { return this.ctx?.state === "running"; }
   decode(data: ArrayBuffer): Promise<AudioBuffer> {
     return this.getCtx().decodeAudioData(data);
   }
@@ -32,7 +37,7 @@ export class AudioEngine {
 
   play(padId: string, buffer: AudioBuffer, o: PlayOptions): void {
     const ctx = this.getCtx();
-    void ctx.resume();
+    if (ctx.state !== "running") void ctx.resume().catch(() => { /* egal */ });
     this.killNow(padId); // nie doppelt: alte Wiedergabe sofort beenden
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();

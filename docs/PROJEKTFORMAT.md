@@ -37,3 +37,6 @@ Pads: optional `playMode`, `groupId`, `stopTargets`. Projekt: optional `groups`.
 
 ## Nachtrag (Pad-Notizen, Version 4)
 Pads: optionales Feld `note` (Text, höchstens 500 Zeichen). Die App schreibt `"version": 4`; Version 1 bis 3 werden weiter gelesen. Details: `docs/PADNOTIZEN.md`.
+
+## Nachtrag (Ein-/Ausblenden, Version 5)
+Pads: optionale Felder `fadeIn`, `fadeOut` (Sekunden). Die App schreibt `"version": 5`; Version 1 bis 4 werden weiter gelesen. Details: `docs/KOPFLEISTE.md`.

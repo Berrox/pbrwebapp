@@ -1,5 +1,5 @@
 // Service Worker: macht die App offline nutzbar. Nur Dateien der App selbst, keine fremden Server.
-const CACHE = "sampler-v1";
+const CACHE = "sampler-v2";
 const TIMEOUT_MS = 3000;
 
 self.addEventListener("install", (event) => {
@@ -7,9 +7,12 @@ self.addEventListener("install", (event) => {
     const cache = await caches.open(CACHE);
     const res = await fetch("./index.html", { cache: "reload" });
     const html = await res.clone().text();
-    const urls = [...html.matchAll(/(?:src|href)="(\.\/[^"?#]+)"/g)].map((m) => m[1]);
+    const urls = [...new Set([...html.matchAll(/(?:src|href)="(\.\/[^"?#]+)"/g)].map((m) => m[1]))];
     await cache.put("./index.html", res);
-    await cache.addAll(["./", ...new Set(urls)]); // alle Dateien, die die Startseite braucht
+    // Programm und Design MÜSSEN gespeichert werden, sonst bricht die Installation ab (statt halb zu funktionieren).
+    await Promise.all(urls.filter((u) => /\.(js|css)$/.test(u)).map((u) => cache.add(u)));
+    // Icons, Manifest usw.: wenn eine fehlt, ist das nicht kritisch.
+    await Promise.allSettled([cache.add("./"), ...urls.filter((u) => !/\.(js|css)$/.test(u)).map((u) => cache.add(u))]);
   })());
   self.skipWaiting();
 });

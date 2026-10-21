@@ -223,35 +223,24 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
 });
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
-const HOLD_MS = 2000;
-let holdTimer: number | undefined;
-let justUnlocked = false;
 const modeBtn = $("modeBtn");
 
 function setMode(edit: boolean): void {
   editMode = edit;
   modeBtn.className = edit ? "edit" : "live";
-  modeBtn.textContent = edit ? "✎ BEARBEITEN – tippen für LIVE" : "🔒 LIVE – 2 s halten zum Bearbeiten";
+  modeBtn.textContent = edit ? "✎ BEARBEITEN – tippen für LIVE" : "🔒 LIVE – tippen zum Bearbeiten";
   $("bankTools").hidden = !edit;
   $("projectTools").hidden = !edit;
   try { localStorage.setItem("sampler.mode", edit ? "edit" : "live"); } catch { /* egal */ }
   render();
 }
+const unlockDialog = $<HTMLDialogElement>("unlockDialog");
 modeBtn.addEventListener("click", () => {
-  if (justUnlocked) { justUnlocked = false; return; } // Loslassen nach dem Halten zählt nicht als Tippen
-  if (editMode) setMode(false);
+  if (editMode) { setMode(false); return; }
+  unlockDialog.returnValue = ""; // sonst würde Esc den Wert vom letzten Mal behalten
+  unlockDialog.showModal();
 });
-modeBtn.addEventListener("pointerdown", (e) => {
-  if (editMode) return;
-  e.preventDefault();
-  modeBtn.classList.add("holding");
-  holdTimer = window.setTimeout(() => {
-    justUnlocked = true; setTimeout(() => { justUnlocked = false; }, 500);
-    setMode(true);
-  }, HOLD_MS);
-});
-const cancelHold = () => { clearTimeout(holdTimer); modeBtn.classList.remove("holding"); };
-for (const ev of ["pointerup", "pointerleave", "pointercancel"]) modeBtn.addEventListener(ev, cancelHold);
+unlockDialog.addEventListener("close", () => { if (unlockDialog.returnValue === "ok") setMode(true); });
 document.addEventListener("contextmenu", (e) => { if (!editMode) e.preventDefault(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.open) engine.stopAll(); });
 engine.onChange(render);

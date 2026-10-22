@@ -1,17 +1,24 @@
 // Audio-Engine: kennt keine Oberfläche. Meldet nur Änderungen über onChange.
+import { EQ_FREQS, isFlat, type Fx, type ReverbSize } from "../model/fx";
 import { clampRegion } from "../model/region";
+import { generateIR } from "./reverbIR";
 
 /** start/end in Sekunden (nicht destruktiv). fadeIn/fadeOut in Sekunden. Fehlen start und end, läuft das ganze Sample. */
 export interface PlayOptions {
   volume: number; loop: boolean; start?: number; end?: number; stopIds?: string[];
   fadeIn?: number; fadeOut?: number;
+  fx?: Fx; // EQ und Hall; fehlt oder alles aus = keine zusätzlichen Audio-Knoten
+  forceChain?: boolean; // Effektkette auch bei "alles aus" aufbauen (Probehören: spätere Änderungen ohne Umbau)
 }
 interface Voice {
   src: AudioBufferSourceNode; gain: GainNode;
   fadeOutSec: number;  // Ausblendzeit beim Stoppen
   autoFadeSec: number; // Ausblendzeit am natürlichen Ende (nur One-Shot), bereits begrenzt
   t0: number; len: number; loop: boolean; endAt?: number;
+  chain?: Chain;
 }
+/** Effektkette eines Pads: Gain -> Tiefen -> Mitten -> Höhen -> Dry -> Master, plus Send -> Hall-Bus. */
+interface Chain { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode; dry: GainNode; send: GainNode; size: ReverbSize; connected: boolean }
 
 const FADE_SECONDS = 0.03; // kurzes Ausblenden gegen Klickgeräusche
 const MAX_FADE = 30;
@@ -24,6 +31,7 @@ export class AudioEngine {
   private masterVol = 1;
   private voices = new Map<string, Voice>(); // genau eine aktive Wiedergabe pro Pad
   private fading = new Set<Voice>();         // gestoppte Pads, die noch ausblenden (STOP ALL erfasst sie)
+  private buses = new Map<ReverbSize, { conv: ConvolverNode; out: GainNode }>(); // gemeinsamer Hall je Größe
   private listeners = new Set<() => void>();
 
   private getCtx(): AudioContext {
@@ -81,7 +89,7 @@ export class AudioEngine {
     const gain = ctx.createGain();
     src.buffer = buffer;
     src.loop = o.loop;
-    src.connect(gain).connect(this.master!);
+    src.connect(gain);
 
     const region = o.start !== undefined || o.end !== undefined ? clampRegion(o.start, o.end, buffer.duration) : null;
     const len = region ? region.end - region.start : buffer.duration;
@@ -102,8 +110,11 @@ export class AudioEngine {
 
     const voice: Voice = { src, gain, fadeOutSec: fadeOut, autoFadeSec: autoOut, t0, len: Number.isFinite(len) ? len : NaN, loop: o.loop, endAt };
     this.voices.set(padId, voice);
+    if (o.fx && (o.forceChain || !isFlat(o.fx))) this.buildChain(voice, o.fx);
+    else gain.connect(this.master!); // ohne Effekte direkt zum Master, wie bisher
     src.onended = () => {
       src.disconnect(); gain.disconnect();
+      if (voice.chain) for (const n of [voice.chain.low, voice.chain.mid, voice.chain.high, voice.chain.dry, voice.chain.send]) n.disconnect();
       this.fading.delete(voice);
       if (this.voices.get(padId) === voice) { this.voices.delete(padId); this.emit(); }
     };
@@ -138,12 +149,77 @@ export class AudioEngine {
     }
   }
 
+  /** EQ und Hall eines laufenden Pads ändern (weich). Hat es noch keine Effektkette, wird sie bei Bedarf eingebaut. */
+  setEffects(padId: string, fx: Fx): void {
+    const v = this.voices.get(padId);
+    if (!v || !this.ctx) return;
+    if (v.chain) this.applyFx(v, fx);
+    else if (!isFlat(fx)) this.buildChain(v, fx);
+  }
+  private buildChain(v: Voice, fx: Fx): void {
+    const ctx = this.ctx!;
+    v.gain.disconnect(); // Direktverbindung zum Master lösen (nur beim nachträglichen Einbau relevant)
+    const filter = (type: BiquadFilterType, freq: number, db: number, q: number) => {
+      const f = ctx.createBiquadFilter();
+      f.type = type; f.frequency.value = freq; f.Q.value = q; f.gain.value = db;
+      return f;
+    };
+    const low = filter("lowshelf", EQ_FREQS.low, fx.low, 0.7);
+    const mid = filter("peaking", EQ_FREQS.mid, fx.mid, 0.8);
+    const high = filter("highshelf", EQ_FREQS.high, fx.high, 0.7);
+    const dry = ctx.createGain(), send = ctx.createGain();
+    send.gain.value = fx.reverb;
+    v.gain.connect(low); low.connect(mid); mid.connect(high); high.connect(dry); dry.connect(this.master!);
+    high.connect(send);
+    const chain: Chain = { low, mid, high, dry, send, size: fx.size, connected: false };
+    if (fx.reverb > 0) { send.connect(this.bus(fx.size).conv); chain.connected = true; } // Hall-Bus nur bei Bedarf
+    v.chain = chain;
+  }
+  private applyFx(v: Voice, fx: Fx): void {
+    const c = v.chain!, t = this.ctx!.currentTime;
+    const set = (p: AudioParam, val: number) => { p.cancelScheduledValues(t); p.setTargetAtTime(val, t, 0.02); };
+    set(c.low.gain, fx.low); set(c.mid.gain, fx.mid); set(c.high.gain, fx.high); set(c.send.gain, fx.reverb);
+    if (fx.reverb <= 0 && c.connected) { c.send.disconnect(); c.connected = false; }
+    else if (fx.reverb > 0 && (!c.connected || fx.size !== c.size)) {
+      if (c.connected) c.send.disconnect();
+      c.send.connect(this.bus(fx.size).conv);
+      c.connected = true;
+    }
+    c.size = fx.size;
+  }
+  /** Gemeinsamer Hall-Raum je Größe, wird beim ersten Bedarf erzeugt. */
+  private bus(size: ReverbSize): { conv: ConvolverNode; out: GainNode } {
+    let b = this.buses.get(size);
+    if (!b) {
+      const ctx = this.ctx!;
+      const ir = generateIR(ctx.sampleRate, size);
+      const buf = ctx.createBuffer(2, ir.left.length, ctx.sampleRate);
+      buf.copyToChannel(ir.left, 0);
+      buf.copyToChannel(ir.right, 1);
+      const conv = ctx.createConvolver();
+      conv.buffer = buf;
+      const out = ctx.createGain();
+      conv.connect(out); out.connect(this.master!);
+      b = { conv, out };
+      this.buses.set(size, b);
+    }
+    return b;
+  }
+
   /** STOP ALL: global, sofort (kurz ausgeblendet), erfasst auch Pads, die gerade ausblenden. */
   stopAll(): void {
     if (!this.ctx) return;
     const all = [...this.voices.values(), ...this.fading];
     this.voices.clear();
     all.forEach((v) => this.fadeOut(v, FADE_SECONDS));
+    const t = this.ctx.currentTime;
+    for (const b of this.buses.values()) { // Hallfahne sofort abschalten: Bus ausblenden und beim nächsten Start neu aufbauen
+      b.out.gain.cancelScheduledValues(t);
+      b.out.gain.setValueAtTime(b.out.gain.value, t);
+      b.out.gain.linearRampToValueAtTime(0, t + FADE_SECONDS);
+      setTimeout(() => { try { b.conv.disconnect(); b.out.disconnect(); } catch { /* egal */ } }, 250);
+    }
+    this.buses.clear();
     this.emit();
   }
 

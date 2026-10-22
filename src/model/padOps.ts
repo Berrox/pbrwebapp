@@ -10,7 +10,7 @@ export function normalizeFade(v: number): number | undefined {
 }
 
 /** Inhalt eines Pads. Taste und MIDI-Note gehören zur Position (Slot) und bleiben, wo sie sind. */
-const CONTENT = ["name", "color", "volume", "loop", "soundId", "start", "end", "playMode", "groupId", "stopTargets", "note", "fadeIn", "fadeOut"] as const;
+const CONTENT = ["name", "color", "volume", "loop", "soundId", "start", "end", "playMode", "groupId", "stopTargets", "note", "fadeIn", "fadeOut", "eqLow", "eqMid", "eqHigh", "reverb", "reverbSize"] as const;
 type Content = Record<(typeof CONTENT)[number], unknown>;
 
 function readContent(p: PadConfig): Content {

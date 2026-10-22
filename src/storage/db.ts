@@ -2,6 +2,7 @@ import { openDB, type DBSchema } from "idb";
 import { contentHash, uuid } from "../model/ids";
 import type { Note } from "../model/notes";
 import type { Group, PlayMode } from "../model/playRules";
+import type { ReverbSize } from "../model/fx";
 
 export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob; duration?: number }
 export interface PadConfig {
@@ -11,6 +12,7 @@ export interface PadConfig {
   playMode?: PlayMode; groupId?: string; stopTargets?: string[]; // Wiedergaberegeln (leer = parallel)
   note?: string; // persönliche Notiz zum Pad (an die Pad-ID gebunden)
   fadeIn?: number; fadeOut?: number; // Ein-/Ausblendzeit in Sekunden (leer = aus)
+  eqLow?: number; eqMid?: number; eqHigh?: number; reverb?: number; reverbSize?: ReverbSize; // EQ in dB, Hall 0 bis 1 (leer = aus)
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
 export interface StoredNote extends Note { order: number }

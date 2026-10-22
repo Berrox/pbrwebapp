@@ -12,6 +12,9 @@ import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
 import { computeStops, type Group, type PlayMode } from "./model/playRules";
 import { uuid } from "./model/ids";
+import { fxFromPad, isFlat, normalizeEq, normalizeReverb, type Fx, type ReverbSize } from "./model/fx";
+import { isLightColor, padFontSize } from "./model/colors";
+import { setIconText } from "./ui/icons";
 import { backupHint, checkExportSize, parseLastExport } from "./model/backup";
 import { formatClock, formatElapsed, formatRemaining, parseStopwatch, swElapsed, swInitial, swReset, swStart, swStop, type StopwatchState } from "./model/clock";
 import { copyPad, normalizeFade, swapPads } from "./model/padOps";
@@ -22,7 +25,7 @@ import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
 import { MAX_ZIP, ProjectError, parseProjectZip, resolveImport } from "./model/projectFormat";
 import { exportProject, importResolved, toBlob } from "./storage/projectIO";
-import { clampInt, makePads, migrateLegacy, moveBank, newBank, padPrefix, type Bank } from "./model/banks";
+import { bankColor, clampInt, makePads, migrateLegacy, moveBank, newBank, padPrefix, type Bank } from "./model/banks";
 
 const engine = new AudioEngine();
 const buffers = new Map<string, AudioBuffer>(); // dekodierte Sounds, nur einmal dekodiert
@@ -47,7 +50,17 @@ const notesUI = mountNotes({
 });
 
 const cur = (): Bank => banks[current];
-function say(msg: string): void { status.textContent = msg; }
+const toastEl = $("toast");
+let toastTimer: number | undefined;
+/** Meldung als kurze Einblendung unten (verschwindet von selbst). Der Text bleibt zusätzlich in #status. */
+function say(msg: string): void {
+  status.textContent = msg;
+  clearTimeout(toastTimer);
+  if (!msg) { toastEl.hidden = true; return; }
+  toastEl.textContent = msg;
+  toastEl.hidden = false;
+  toastTimer = window.setTimeout(() => { toastEl.hidden = true; }, Math.min(9000, 3000 + msg.length * 40));
+}
 
 async function persistBanks(): Promise<void> {
   try { await saveBanks(banks); } catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
@@ -85,11 +98,13 @@ function renderTabs(): void {
     const t = document.createElement("button");
     t.type = "button";
     t.className = "tab" + (i === current ? " active" : "");
+    t.style.borderTop = `4px solid ${bankColor(b)}`; // Farbstreifen der Bank
     const running = playing.some((id) => id.startsWith(padPrefix(b.id)));
     t.textContent = (running ? "● " : "") + b.name; // textContent: kein HTML aus Namen
     t.addEventListener("pointerdown", (e) => { e.preventDefault(); current = i; render(); void preloadBank(); }); // stoppt nichts
     tabs.append(t);
   });
+  $<HTMLInputElement>("bColor").value = bankColor(cur());
   $<HTMLInputElement>("bCols").value = String(cur().columns);
   $<HTMLInputElement>("bCount").value = String(cur().padCount);
 }
@@ -101,9 +116,12 @@ function renderGrid(): void {
   for (const p of makePads(cur(), store)) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "pad" + (p.soundId ? "" : " empty") + (engine.isPlaying(p.id) ? " playing" : "");
+    const label = p.name || (editMode ? "+ leer" : "");
+    b.className = "pad" + (p.soundId ? "" : " empty") + (engine.isPlaying(p.id) ? " playing" : "") + (p.soundId && isLightColor(p.color) ? " dk" : "");
+    b.setAttribute("aria-pressed", String(engine.isPlaying(p.id)));
     b.style.background = p.color;
-    b.textContent = p.name || (editMode ? "+ leer" : "");
+    b.style.fontSize = `${padFontSize(label)}px`; // lange Namen etwas kleiner
+    b.textContent = label;
     const hint = [p.key ? `[${keyLabel(p.key)}]` : "", p.midiNote !== undefined ? `♪${noteName(p.midiNote)}` : ""].filter(Boolean).join(" ");
     if (hint && p.soundId) { const s = document.createElement("small"); s.textContent = hint; b.append(s); }
     if (notesUI.visible && p.note) { // Pad-Notizen nur bei "Notizen: AN" und nur, wenn vorhanden
@@ -136,7 +154,7 @@ async function onPad(p: PadConfig): Promise<void> {
     if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
     engine.play(p.id, buf, {
       volume: p.volume, loop: p.loop, start: p.start, end: p.end,
-      fadeIn: p.fadeIn, fadeOut: p.fadeOut,
+      fadeIn: p.fadeIn, fadeOut: p.fadeOut, fx: fxFromPad(p),
       stopIds: computeStops(p, engine.playingIds(), (id) => store.get(id), groups), // erst jetzt ausgewertet, direkt vor dem Start
     });
     if (!engine.running) say("Audio wird reaktiviert … (Display einmal berühren, falls nichts zu hören ist)");
@@ -196,6 +214,7 @@ function openDialog(p: PadConfig): void {
   $<HTMLInputElement>("fFadeIn").value = String(p.fadeIn ?? 0);
   $<HTMLInputElement>("fFadeOut").value = String(p.fadeOut ?? 0);
   showFades();
+  fillFx(p);
   fillOpTargets(p);
   $("fNoteRow").hidden = !notesUI.visible; // Notizfeld nur bei "Notizen: AN"
   $<HTMLTextAreaElement>("fNote").value = p.note ?? "";
@@ -211,12 +230,13 @@ function openDialog(p: PadConfig): void {
 dialog.addEventListener("close", async () => {
   const p = editing; editing = null;
   if (!p) return;
+  engine.stop("__preview__"); // Probehören beenden
   learning = null;
   const action = dialog.returnValue;
   let conflictMsg = "";
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined, fadeIn: undefined, fadeOut: undefined });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined, fadeIn: undefined, fadeOut: undefined, eqLow: undefined, eqMid: undefined, eqHigh: undefined, reverb: undefined, reverbSize: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
@@ -225,6 +245,11 @@ dialog.addEventListener("close", async () => {
     p.loop = $<HTMLInputElement>("fLoop").checked;
     p.fadeIn = normalizeFade(Number($<HTMLInputElement>("fFadeIn").value));
     p.fadeOut = normalizeFade(Number($<HTMLInputElement>("fFadeOut").value));
+    const fx = readFx();
+    p.eqLow = normalizeEq(fx.low); p.eqMid = normalizeEq(fx.mid); p.eqHigh = normalizeEq(fx.high);
+    p.reverb = normalizeReverb(fx.reverb);
+    p.reverbSize = p.reverb ? fx.size : undefined;
+    engine.setEffects(p.id, fxFromPad(p));
     const pads = makePads(cur(), store);
     const kc = findConflict(pads, p.id, "key", pendingKey), mc = findConflict(pads, p.id, "midiNote", pendingMidi);
     if (kc) conflictMsg += `Taste ${keyLabel(pendingKey!)} ist schon an „${kc.name || "Pad"}“ vergeben und wurde nicht übernommen. `;
@@ -248,7 +273,7 @@ dialog.addEventListener("close", async () => {
       p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
       if (!p.name) p.name = newName.replace(/\.[^.]+$/, "");
     }
-  } else { engine.setVolume(p.id, p.volume); render(); return; } // Abbrechen: Lautstärke zurücksetzen
+  } else { engine.setVolume(p.id, p.volume); engine.setEffects(p.id, fxFromPad(p)); render(); return; } // Abbrechen: Lautstärke zurücksetzen
   try { await savePad(p); say(conflictMsg || "Gespeichert."); }
   catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
   render();
@@ -539,6 +564,7 @@ $("groupAdd").addEventListener("click", async () => {
 function showVolume(): void { $("fVolPct").textContent = volumePercent(Number($<HTMLInputElement>("fVol").value)); }
 $("fVol").addEventListener("input", () => {
   showVolume();
+  engine.setVolume(PREVIEW_ID, Number($<HTMLInputElement>("fVol").value));
   if (editing) engine.setVolume(editing.id, Number($<HTMLInputElement>("fVol").value)); // laufendes Pad hörbar anpassen
 });
 
@@ -570,13 +596,12 @@ $("masterVol").addEventListener("input", () => applyMaster(Number($<HTMLInputEle
 // ---- Bildschirm wach halten ----
 const wake = new WakeLockManager(("wakeLock" in navigator ? navigator.wakeLock : undefined) as unknown as WakeApi | undefined);
 let wantWake = false;
-const WAKE_TEXT = { unsupported: "☀ Wach: nicht verfügbar", off: "☀ Wach: AUS", armed: "☀ Wach: AN (nur Live)", on: "☀ Wach: AN ✓", error: "☀ Wach: Fehler, tippen" };
+const WAKE_SUB = { unsupported: "auf diesem Gerät nicht verfügbar", off: "nur im Live-Modus", armed: "wartet auf Live-Modus", on: "Sperre aktiv", error: "abgelehnt, tippen für neuen Versuch" };
 const wakeBtn = $<HTMLButtonElement>("wakeBtn");
 wake.onChange = () => {
   const st = wake.state;
-  wakeBtn.textContent = WAKE_TEXT[st];
+  $("wakeSub").textContent = WAKE_SUB[st];
   wakeBtn.disabled = st === "unsupported";
-  wakeBtn.classList.toggle("active", st === "on" || st === "armed");
   wakeBtn.setAttribute("aria-pressed", String(st === "on" || st === "armed"));
 };
 wake.onChange();
@@ -599,7 +624,7 @@ function renderClock(): void {
   const el = swElapsed(stopwatch, now);
   const running = stopwatch.since !== null;
   $("clock").textContent = formatClock(new Date(now));
-  $("swToggle").textContent = `⏱ ${formatElapsed(el)} ${running ? "⏸" : "▶"}`;
+  setIconText($("swToggle"), running ? "pause" : "play", formatElapsed(el));
   $("swToggle").setAttribute("aria-label", running ? "Stoppuhr anhalten" : "Stoppuhr starten");
   $<HTMLButtonElement>("swReset").disabled = running || el === 0; // Zurücksetzen nur bei angehaltener Uhr
 }
@@ -651,10 +676,10 @@ function renderBackup(): void {
   try { last = parseLastExport(localStorage.getItem("sampler.lastExport")); } catch { /* egal */ }
   const hasContent = [...store.values()].some((p) => p.soundId || p.name) || notesStore.notes.length > 0;
   const hint = backupHint(last, Date.now(), hasContent);
-  $("backupInfo").textContent = hint ? `💾 ${hint.text}` : "💾 Noch nichts zu sichern";
+  $("backupInfo").textContent = hint ? hint.text : "Noch nichts zu sichern";
   const chip = $("backupChip");
   chip.hidden = !(hint && hint.overdue); // im Kopf nur sichtbar, wenn die Sicherung überfällig ist
-  chip.textContent = hint ? `💾 ${hint.text}: jetzt exportieren` : "";
+  chip.textContent = hint ? `${hint.text}: jetzt exportieren` : "";
 }
 $("backupChip").addEventListener("click", () => {
   if (!editMode) { say("Zum Exportieren in den Bearbeiten-Modus wechseln (Projekt-Werkzeuge)."); return; }
@@ -662,13 +687,88 @@ $("backupChip").addEventListener("click", () => {
 });
 setInterval(renderBackup, 60_000);
 
+// ---- Menü "Mehr", Helligkeit, Bankfarbe ----
+const moreMenu = $<HTMLDialogElement>("moreMenu");
+$("moreBtn").addEventListener("click", () => { if (moreMenu.open) moreMenu.close(); else moreMenu.show(); }); // nicht modal: STOP ALL bleibt erreichbar
+document.addEventListener("pointerdown", (e) => {
+  if (moreMenu.open && !moreMenu.contains(e.target as Node) && !$("moreBtn").contains(e.target as Node)) moreMenu.close();
+}, true);
+function applyDim(level: string, persist = true): void {
+  const alpha = level === "40" ? 0.6 : level === "70" ? 0.3 : 0;
+  $("dim").style.background = `rgba(0,0,0,${alpha})`;
+  document.querySelectorAll<HTMLButtonElement>("#dimSeg button").forEach((b) => b.classList.toggle("on", b.dataset.dim === level));
+  if (persist) { try { localStorage.setItem("sampler.dim", level); } catch { /* egal */ } }
+}
+document.querySelectorAll<HTMLButtonElement>("#dimSeg button").forEach((b) => b.addEventListener("click", () => applyDim(b.dataset.dim ?? "100")));
+$("bColor").addEventListener("change", async (e) => {
+  cur().color = (e.target as HTMLInputElement).value;
+  await persistBanks(); render();
+});
+
+// ---- Klang: EQ und Hall im Pad-Dialog ----
+const FX_RANGES = ["fEqLow", "fEqMid", "fEqHigh", "fRev"];
+function readFx(): Fx {
+  const n = (id: string) => Number($<HTMLInputElement>(id).value);
+  return { low: n("fEqLow"), mid: n("fEqMid"), high: n("fEqHigh"), reverb: n("fRev") / 100, size: $<HTMLSelectElement>("fRevSize").value as ReverbSize };
+}
+function showFx(): void {
+  for (const [inp, out] of [["fEqLow", "fEqLowOut"], ["fEqMid", "fEqMidOut"], ["fEqHigh", "fEqHighOut"]]) {
+    const v = Number($<HTMLInputElement>(inp).value);
+    $(out).textContent = `${v > 0 ? "+" : ""}${v} dB`;
+  }
+  const r = Number($<HTMLInputElement>("fRev").value);
+  $("fRevOut").textContent = r > 0 ? `${r} %` : "aus";
+}
+function fillFx(p: PadConfig): void {
+  const f = fxFromPad(p);
+  $<HTMLInputElement>("fEqLow").value = String(f.low);
+  $<HTMLInputElement>("fEqMid").value = String(f.mid);
+  $<HTMLInputElement>("fEqHigh").value = String(f.high);
+  $<HTMLInputElement>("fRev").value = String(Math.round(f.reverb * 100));
+  $<HTMLSelectElement>("fRevSize").value = f.size;
+  $<HTMLDetailsElement>("fxBox").open = !isFlat(f); // klappt nur auf, wenn das Pad Klang-Einstellungen hat
+  showFx();
+}
+const onFx = () => { showFx(); engine.setEffects(PREVIEW_ID, readFx()); if (editing) engine.setEffects(editing.id, readFx()); }; // laufendes Pad sofort anpassen
+for (const id of FX_RANGES) $(id).addEventListener("input", onFx);
+$("fRevSize").addEventListener("change", onFx);
+$("fFxReset").addEventListener("click", () => { for (const id of FX_RANGES) $<HTMLInputElement>(id).value = "0"; onFx(); });
+
+// ---- Probehören im Klang-Bereich ----
+const PREVIEW_ID = "__preview__";
+function updatePreviewBtn(): void {
+  const on = engine.isPlaying(PREVIEW_ID);
+  setIconText($("fFxPreview"), on ? "stop" : "play", on ? "Stopp" : "Probehören");
+}
+$("fFxPreview").addEventListener("click", async () => {
+  if (engine.isPlaying(PREVIEW_ID)) { engine.stop(PREVIEW_ID); return; }
+  const p = editing;
+  const soundId = $<HTMLSelectElement>("fLibrary").value || p?.soundId; // auch ein in der Bibliothek gewählter Sound
+  if (!p || !soundId) {
+    say($<HTMLInputElement>("fFile").files?.length ? "Neue Datei zuerst speichern, dann probehören." : "Zuerst eine Audiodatei zuweisen und speichern.");
+    return;
+  }
+  engine.unlock();
+  const buf = await bufferFor(soundId);
+  if (!buf) { say("Audiodatei fehlt oder ist defekt."); return; }
+  const same = soundId === p.soundId; // Schnittpunkte gelten nur für den gespeicherten Sound des Pads
+  engine.play(PREVIEW_ID, buf, {
+    volume: Number($<HTMLInputElement>("fVol").value), loop: true, // Wiederholen, damit man beim Einstellen weiter hört
+    start: same ? p.start : undefined, end: same ? p.end : undefined,
+    fx: readFx(), forceChain: true,
+  });
+});
+engine.onChange(updatePreviewBtn);
+updatePreviewBtn();
+
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");
 
 function setMode(edit: boolean): void {
   editMode = edit;
   modeBtn.className = edit ? "edit" : "live";
-  modeBtn.textContent = edit ? "✎ BEARBEITEN – tippen für LIVE" : "🔒 LIVE – tippen zum Bearbeiten";
+  setIconText(modeBtn, edit ? "pencil" : "lock", edit ? "Bearbeiten" : "Live");
+  modeBtn.setAttribute("aria-label", edit ? "Bearbeiten-Modus aktiv. Tippen für Live-Modus." : "Live-Modus aktiv. Tippen zum Bearbeiten.");
   $("bankTools").hidden = !edit;
   $("projectTools").hidden = !edit;
   notesUI.setEditable(edit); // im Live-Modus sind Notizen nur lesbar
@@ -693,6 +793,7 @@ document.addEventListener("keydown", (e) => {
     else { pendingKey = e.code; learning = null; }
     refreshLearn(); return;
   }
+  if (e.key === "Escape" && moreMenu.open) { moreMenu.close(); return; } // Esc schließt zuerst das Menü
   if (e.key === "Escape" && !anyDialogOpen()) { engine.stopAll(); return; }
   if (editMode || anyDialogOpen() || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
   const tag = (e.target as HTMLElement).tagName;
@@ -748,6 +849,9 @@ async function start(): Promise<void> {
   let m = 1;
   try { const raw = localStorage.getItem("sampler.master"); if (raw !== null && Number.isFinite(Number(raw))) m = Math.min(1, Math.max(0, Number(raw))); } catch { /* egal */ }
   $<HTMLInputElement>("masterVol").value = String(m);
+  let dimLevel = "100";
+  try { dimLevel = localStorage.getItem("sampler.dim") ?? "100"; } catch { /* egal */ }
+  applyDim(["70", "40"].includes(dimLevel) ? dimLevel : "100", false);
   applyMaster(m, false);
   try { wantWake = localStorage.getItem("sampler.wake") === "on"; } catch { /* egal */ }
   wake.setEnabled(wantWake);

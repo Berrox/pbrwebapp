@@ -2,7 +2,7 @@
 import type { PadConfig } from "../storage/db";
 import { uuid } from "./ids";
 
-export interface Bank { id: string; name: string; columns: number; padCount: number }
+export interface Bank { id: string; name: string; columns: number; padCount: number; color?: string }
 
 export const padPrefix = (bankId: string): string => `${bankId}:`;
 export const padId = (bankId: string, index: number): string => `${bankId}:${index}`;
@@ -49,4 +49,14 @@ export function isBlankPad(p: PadConfig): boolean {
   return !p.soundId && !p.name && !p.note && !p.key && p.midiNote === undefined && !p.playMode && !p.groupId
     && !p.stopTargets?.length && !p.fadeIn && !p.fadeOut && p.start === undefined && p.end === undefined
     && p.color === d.color && p.volume === d.volume && p.loop === d.loop;
+}
+
+/** Gedeckte Farben für die Streifen der Bank-Tabs. */
+export const BANK_PALETTE = ["#60a5fa", "#f59e0b", "#a78bfa", "#2dd4bf", "#f472b6", "#4ade80", "#fb923c", "#94a3b8"];
+/** Eigene Farbe der Bank, sonst eine feste Farbe aus der Palette (stabil über die Bank-ID, unabhängig von der Reihenfolge). */
+export function bankColor(b: Bank): string {
+  if (b.color) return b.color;
+  let h = 0;
+  for (const ch of b.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return BANK_PALETTE[h % BANK_PALETTE.length];
 }

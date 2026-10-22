@@ -120,3 +120,40 @@ dialog textarea { width: 100%; padding: 8px; font: inherit; resize: vertical; ba
 #wakeBtn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chip { background: #92400e; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; font-weight: 700; cursor: pointer; min-height: 40px; }
 #backupInfo { color: var(--muted); font-size: 0.9rem; align-self: center; }
+.ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; flex-shrink: 0; }
+button .ic { margin-right: 8px; }
+button .ic:only-child { margin-right: 0; }
+.grow { flex: 1; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: 0; }
+.ghost { height: 48px; border-radius: 12px; border: 1px solid #343741; background: var(--panel); color: var(--text); font-size: 1rem; font-weight: 600; padding: 0 14px; display: inline-flex; align-items: center; cursor: pointer; font-variant-numeric: tabular-nums; }
+.ghost:disabled { opacity: 0.45; cursor: default; }
+.master .ic { margin: 0; }
+#modeBtn { display: inline-flex; align-items: center; }
+.pad.playing::before { content: none; }
+.pad.dk { color: #111; text-shadow: none; }
+.pad.dk.playing { border-color: #111; box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.4) inset; }
+.pad.dk small.padTime { background: rgba(255, 255, 255, 0.75); color: #111; }
+.pad.dk .padBar { background: rgba(255, 255, 255, 0.4); }
+.pad.dk .padBar i { background: #111; }
+#toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: min(640px, 92vw); background: var(--panel); border: 1px solid #343741; border-radius: 999px; padding: 10px 20px; z-index: 50; pointer-events: none; text-align: center; }
+#toast[hidden] { display: none; }
+#dim { position: fixed; inset: 0; pointer-events: none; z-index: 9999; }
+#moreMenu { position: fixed; inset: 76px 16px auto auto; margin: 0; min-width: 0; width: min(380px, 94vw); background: var(--panel); color: var(--text); border: 1px solid #343741; border-radius: 16px; padding: 8px 20px 16px; }
+#moreMenu h2 { margin: 0; padding: 12px 0; font-size: 1.25rem; border-bottom: 1px solid #2b2e36; }
+.mrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #2b2e36; }
+.mrow b { font-size: 1.05rem; font-weight: 600; }
+.mrow small { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+.switch { width: 52px; height: 30px; border-radius: 15px; border: 0; background: #343741; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; }
+.switch i { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; }
+.switch[aria-pressed="true"] { background: var(--accent); }
+.switch[aria-pressed="true"] i { left: 25px; }
+.switch:disabled { opacity: 0.45; cursor: default; }
+.seg { display: flex; border: 1px solid #343741; border-radius: 10px; overflow: hidden; }
+.seg button { height: 44px; padding: 0 14px; border: 0; background: var(--bg); color: #c7ccd4; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+.seg button.on { background: var(--accent); color: #fff; }
+#moreMenu .st { color: var(--muted); font-size: 0.9rem; margin: 8px 0 0; }
+#moreMenu .st:empty { display: none; }
+#moreMenu .st:first-of-type { margin-top: 16px; }
+.fxbox { border: 1px solid #343741; border-radius: 10px; margin: 12px 0; padding: 0 12px 8px; }
+.fxbox summary { font-weight: 700; cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+#moreMenu { z-index: 100; } /* über den Pads (die sind position: relative), unter der Abdunklung */

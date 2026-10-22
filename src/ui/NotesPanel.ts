@@ -2,7 +2,7 @@
 import type { NotesStore } from "../model/notes";
 
 const VIS_KEY = "sampler.notes";
-const STATUS_TEXT = { idle: "", saving: "Speichern …", saved: "✓ Gespeichert", error: "⚠ Speichern fehlgeschlagen. Bitte Projekt exportieren." };
+const STATUS_TEXT = { idle: "", saving: "Speichern …", saved: "✓ Gespeichert", error: "Speichern fehlgeschlagen. Bitte Projekt exportieren." };
 
 interface Elements {
   store: NotesStore; panel: HTMLElement; list: HTMLElement; status: HTMLElement;
@@ -16,7 +16,6 @@ export function mountNotes({ store, panel, list, status, addBtn, toggle, onVisib
     panel.hidden = !v; // nur ausblenden: Inhalte bleiben unverändert erhalten
     toggle.setAttribute("aria-pressed", String(v));
     toggle.classList.toggle("active", v);
-    toggle.textContent = v ? "📝 Notizen: AN" : "📝 Notizen: AUS";
     try { localStorage.setItem(VIS_KEY, v ? "on" : "off"); } catch { /* egal */ }
     if (!v) void store.flush();
   }

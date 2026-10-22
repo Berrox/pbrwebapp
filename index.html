@@ -16,16 +16,26 @@
   <header id="topbar">
     <button id="stopAll" type="button">STOP ALL</button>
     <button id="modeBtn" type="button" class="edit">Modus</button>
-    <button id="notesBtn" type="button" class="tab" aria-pressed="false">📝 Notizen</button>
-    <button id="wakeBtn" type="button" class="tab" aria-pressed="false">☀ Wach: AUS</button>
-    <label class="master" title="Master-Lautstärke (alle Pads)">🔊 <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Master-Lautstärke in Prozent" /><output id="masterPct" for="masterVol">100 %</output></label>
-    <span id="clock" aria-label="Uhrzeit">--:--:--</span>
-    <span class="sw"><button id="swToggle" type="button" class="tab">⏱ 00:00 ▶</button><button id="swReset" type="button" class="tab" aria-label="Stoppuhr zurücksetzen" disabled>↺</button></span>
+    <label class="master" title="Master-Lautstärke (alle Pads)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg><input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Master-Lautstärke in Prozent" /><output id="masterPct" for="masterVol">100 %</output></label>
+    <span class="grow"></span>
     <button id="backupChip" type="button" class="chip" hidden></button>
-    <span id="offlineState"></span>
-    <span id="midiState"></span>
-    <span id="status"></span>
+    <span id="clock" aria-label="Uhrzeit">--:--:--</span>
+    <button id="swToggle" type="button" class="ghost">00:00</button>
+    <button id="moreBtn" type="button" class="ghost" aria-label="Mehr" aria-haspopup="dialog"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+    <span id="status" class="sr"></span>
   </header>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="dim"></div>
+  <dialog id="moreMenu" aria-label="Mehr">
+    <h2>Mehr</h2>
+    <div class="mrow"><div><b>Bildschirm wach halten</b><small id="wakeSub">nur im Live-Modus</small></div><button id="wakeBtn" type="button" class="switch" aria-pressed="false" aria-label="Bildschirm wach halten"><i></i></button></div>
+    <div class="mrow"><div><b>Notizen anzeigen</b><small>Notizbereich und Pad-Notizen</small></div><button id="notesBtn" type="button" class="switch" aria-pressed="false" aria-label="Notizen anzeigen"><i></i></button></div>
+    <div class="mrow"><div><b>Helligkeit</b><small>Oberfläche abdunkeln</small></div><div class="seg" id="dimSeg"><button type="button" data-dim="100">100 %</button><button type="button" data-dim="70">70 %</button><button type="button" data-dim="40">40 %</button></div></div>
+    <div class="mrow"><div><b>Stoppuhr</b><small>Zurücksetzen nur bei angehaltener Uhr</small></div><button id="swReset" type="button" class="ghost" disabled>Zurücksetzen</button></div>
+    <p class="st" id="offlineState"></p>
+    <p class="st" id="midiState"></p>
+    <p class="st" id="backupInfo"></p>
+  </dialog>
   <nav id="bankbar">
     <div id="tabs"></div>
     <div id="bankTools" hidden>
@@ -34,6 +44,7 @@
       <button id="bLeft" type="button" aria-label="Bank nach links">◀</button>
       <button id="bRight" type="button" aria-label="Bank nach rechts">▶</button>
       <button id="bDel" type="button">Löschen</button>
+      <label>Farbe <input id="bColor" type="color" aria-label="Farbe der Bank" /></label>
       <label>Spalten <input id="bCols" type="number" min="1" max="8" /></label>
       <label>Pads <input id="bCount" type="number" min="1" max="48" /></label>
     </div>
@@ -43,7 +54,6 @@
       <button id="pLibrary" type="button" class="tab">Soundbibliothek</button>
       <button id="pImport" type="button" class="tab">Projekt importieren …</button>
       <input id="pFile" type="file" accept=".zip,application/zip" hidden />
-      <span id="backupInfo"></span>
     </div>
   </nav>
   <div id="work">
@@ -69,6 +79,16 @@
       <p class="learn">MIDI: <b id="fMidiLabel">–</b>
         <button type="button" id="fMidiLearn" class="tab">MIDI lernen</button>
         <button type="button" id="fMidiClear" class="tab" aria-label="MIDI-Note entfernen">✕</button></p>
+      <details class="fxbox" id="fxBox">
+        <summary>Klang (EQ und Hall)</summary>
+        <label>Tiefen <span class="volRow"><input id="fEqLow" type="range" min="-12" max="12" step="1" aria-label="Tiefen in dB" /><output id="fEqLowOut">0 dB</output></span></label>
+        <label>Mitten <span class="volRow"><input id="fEqMid" type="range" min="-12" max="12" step="1" aria-label="Mitten in dB" /><output id="fEqMidOut">0 dB</output></span></label>
+        <label>Höhen <span class="volRow"><input id="fEqHigh" type="range" min="-12" max="12" step="1" aria-label="Höhen in dB" /><output id="fEqHighOut">0 dB</output></span></label>
+        <label>Hall <span class="volRow"><input id="fRev" type="range" min="0" max="100" step="5" aria-label="Hall-Menge in Prozent" /><output id="fRevOut">aus</output></span></label>
+        <label>Hall-Größe <select id="fRevSize"><option value="room">Raum</option><option value="hall">Halle</option><option value="church">Kirche</option></select></label>
+        <div class="row wrap"><button type="button" id="fFxPreview">Probehören</button><button type="button" id="fFxReset">Klang zurücksetzen</button></div>
+        <p class="hint">„Probehören“ spielt den Ton dieses Pads wiederholt mit den eingestellten Werten, bis du auf Stopp tippst. Änderungen sind dabei sofort hörbar. Der Hall klingt nach dem Stoppen noch kurz nach, STOP ALL schaltet ihn sofort ab. „Abbrechen“ stellt den gespeicherten Klang wieder her.</p>
+      </details>
       <div id="fNoteRow" hidden><label>Notiz zu diesem Pad <textarea id="fNote" rows="3" maxlength="500" placeholder="z. B. nur zusammen mit Pad 3 verwenden"></textarea></label></div>
       <fieldset class="behavior">
         <legend>Kopieren / Tauschen</legend>

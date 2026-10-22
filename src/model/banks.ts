@@ -41,3 +41,12 @@ export function migrateLegacy(pads: PadConfig[], bankId: string): { oldId: strin
   }
   return out;
 }
+
+export const MAX_PADS = 48; // größte einstellbare Pad-Anzahl pro Bank
+/** Pad ohne jeden eigenen Inhalt (entspricht einem neuen, leeren Pad). */
+export function isBlankPad(p: PadConfig): boolean {
+  const d = defaultPad(p.id);
+  return !p.soundId && !p.name && !p.note && !p.key && p.midiNote === undefined && !p.playMode && !p.groupId
+    && !p.stopTargets?.length && !p.fadeIn && !p.fadeOut && p.start === undefined && p.end === undefined
+    && p.color === d.color && p.volume === d.volume && p.loop === d.loop;
+}

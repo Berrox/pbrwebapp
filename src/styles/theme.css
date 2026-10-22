@@ -118,3 +118,5 @@ dialog textarea { width: 100%; padding: 8px; font: inherit; resize: vertical; ba
 .sw { display: flex; gap: 6px; }
 #swToggle { font-variant-numeric: tabular-nums; min-width: 8.5em; }
 #wakeBtn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip { background: #92400e; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; font-weight: 700; cursor: pointer; min-height: 40px; }
+#backupInfo { color: var(--muted); font-size: 0.9rem; align-self: center; }

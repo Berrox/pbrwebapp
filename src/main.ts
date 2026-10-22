@@ -12,6 +12,7 @@ import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
 import { computeStops, type Group, type PlayMode } from "./model/playRules";
 import { uuid } from "./model/ids";
+import { backupHint, checkExportSize, parseLastExport } from "./model/backup";
 import { formatClock, formatElapsed, formatRemaining, parseStopwatch, swElapsed, swInitial, swReset, swStart, swStop, type StopwatchState } from "./model/clock";
 import { copyPad, normalizeFade, swapPads } from "./model/padOps";
 import { WakeLockManager, type WakeApi } from "./input/wakelock";
@@ -19,7 +20,7 @@ import { normalizeNote, volumePercent } from "./model/padNotes";
 import { padAction } from "./model/mode";
 import { setupOffline } from "./pwa";
 import { clampRegion } from "./model/region";
-import { ProjectError, parseProjectZip, resolveImport } from "./model/projectFormat";
+import { MAX_ZIP, ProjectError, parseProjectZip, resolveImport } from "./model/projectFormat";
 import { exportProject, importResolved, toBlob } from "./storage/projectIO";
 import { clampInt, makePads, migrateLegacy, moveBank, newBank, padPrefix, type Bank } from "./model/banks";
 
@@ -119,7 +120,7 @@ function renderGrid(): void {
   }
   syncProgress();
 }
-function render(): void { renderTabs(); renderGrid(); }
+function render(): void { renderTabs(); renderGrid(); renderBackup(); }
 
 async function onPad(p: PadConfig): Promise<void> {
   engine.unlock(); // wartet nicht (iOS)
@@ -312,6 +313,10 @@ $("fEdit").addEventListener("click", async () => {
 
 let projectName = "Sampler-Projekt";
 $("pExport").addEventListener("click", async () => {
+  try { // Größenprüfung vor dem Export: zu große Projekte lassen sich später nicht importieren
+    const chk = checkExportSize(await listSounds());
+    if (chk.level !== "ok" && !confirm(chk.message)) return;
+  } catch { /* Prüfung nicht möglich: Export bleibt erlaubt */ }
   const name = prompt("Name des Projekts (wird zum Dateinamen):", projectName)?.trim();
   if (!name) return;
   projectName = name;
@@ -323,7 +328,9 @@ $("pExport").addEventListener("click", async () => {
     a.href = url; a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-    say(`ZIP erzeugt (${(bytes.length / 1048576).toFixed(1)} MB), Download gestartet. Bitte prüfe, ob die Datei gespeichert wurde.`);
+    try { localStorage.setItem("sampler.lastExport", String(Date.now())); } catch { /* egal */ } // Zeitpunkt: Download gestartet
+    renderBackup();
+    say(`ZIP erzeugt (${(bytes.length / 1048576).toFixed(1)} MB), Download gestartet. Bitte prüfe, ob die Datei gespeichert wurde.${bytes.length > MAX_ZIP ? " ACHTUNG: Die Datei ist größer als die Importgrenze." : ""}`);
   } catch { say("Export fehlgeschlagen (zu wenig Arbeitsspeicher oder Platz?)."); }
 });
 $("pImport").addEventListener("click", () => $<HTMLInputElement>("pFile").click());
@@ -637,6 +644,23 @@ async function padOp(kind: "copy" | "swap"): Promise<void> {
 }
 $("fCopy").addEventListener("click", () => void padOp("copy"));
 $("fSwap").addEventListener("click", () => void padOp("swap"));
+
+// ---- Sicherungserinnerung ----
+function renderBackup(): void {
+  let last: number | null = null;
+  try { last = parseLastExport(localStorage.getItem("sampler.lastExport")); } catch { /* egal */ }
+  const hasContent = [...store.values()].some((p) => p.soundId || p.name) || notesStore.notes.length > 0;
+  const hint = backupHint(last, Date.now(), hasContent);
+  $("backupInfo").textContent = hint ? `💾 ${hint.text}` : "💾 Noch nichts zu sichern";
+  const chip = $("backupChip");
+  chip.hidden = !(hint && hint.overdue); // im Kopf nur sichtbar, wenn die Sicherung überfällig ist
+  chip.textContent = hint ? `💾 ${hint.text}: jetzt exportieren` : "";
+}
+$("backupChip").addEventListener("click", () => {
+  if (!editMode) { say("Zum Exportieren in den Bearbeiten-Modus wechseln (Projekt-Werkzeuge)."); return; }
+  $("pExport").click();
+});
+setInterval(renderBackup, 60_000);
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");

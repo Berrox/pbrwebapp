@@ -45,13 +45,15 @@ describe("Pad kopieren und tauschen", () => {
     expect(s.get("a:0")).toMatchObject({ name: "Jingle", soundId: "s2", key: "KeyQ", midiNote: 60 });
     expect(s.get("a:1")).toMatchObject({ name: "Intro", soundId: "s1", loop: true, note: "Notiz A", key: "KeyW" });
   });
-  it("Tauschen: Stop-Ziele anderer Pads folgen dem Inhalt, Selbstverweise entfallen", () => {
+  it("Tauschen: Stop-Ziele folgen dem Inhalt, auch bei gegenseitigen Zielen", () => {
     const s = mk();
     const changed = swapPads(s, "a:0", "a:2");
     expect(s.get("a:0")!.name).toBe("Musik");
     expect(s.get("a:2")!.name).toBe("Intro");
-    expect(s.get("a:2")!.stopTargets).toBeUndefined(); // zeigte auf a:2 (sich selbst nach dem Tausch)
-    expect(s.get("a:0")!.stopTargets).toBeUndefined();
+    // Intro zielte auf Musik und Musik auf Intro. Nach dem Tausch sitzt Intro auf a:2 und Musik auf a:0,
+    // die Beziehung bleibt also bestehen, nur die Positionen sind vertauscht.
+    expect(s.get("a:2")!.stopTargets).toEqual(["a:0"]); // Intro zielt weiter auf Musik
+    expect(s.get("a:0")!.stopTargets).toEqual(["a:2"]); // Musik zielt weiter auf Intro
     expect(changed).toEqual(expect.arrayContaining(["a:0", "a:2"]));
     const t = mk();
     t.get("a:1")!.stopTargets = ["a:0"];

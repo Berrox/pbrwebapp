@@ -1,15 +1,15 @@
 // Projektformat (siehe docs/PROJEKTFORMAT.md). Reine Logik ohne Browser/Datenbank, daher testbar.
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import type { PadConfig } from "../storage/db";
-import { padId, type Bank } from "./banks";
+import { MAX_PADS, isBlankPad, padId, type Bank } from "./banks";
 import { isAssignableKey } from "./keys";
 import { audioExtension, audioMime } from "./audioFormats";
 import { isPlayMode, type Group, type PlayMode } from "./playRules";
 import { MAX_NOTES, NOTE_TEXT_MAX, NOTE_TITLE_MAX, type Note } from "./notes";
 
 export const FORMAT_NAME = "sampler-project";
-export const FORMAT_VERSION = 5; // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
-const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
+export const FORMAT_VERSION = 6; // 6: auch ausgeblendete Pads (Position über der Pad-Anzahl) werden gespeichert // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
+export const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
 export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string; fadeIn?: number; fadeOut?: number }
@@ -56,7 +56,7 @@ export function validateProject(raw: unknown): ProjectFile {
       const color = str(p.color, 7, "eine Farbe");
       if (!COLOR.test(color)) fail("Das Projekt ist beschädigt: Farbe ungültig.");
       const out: PadEntry = {
-        index: num(p.index, 0, padCount - 1, "die Pad-Position", true), name: str(p.name, 60, "ein Pad-Name"),
+        index: num(p.index, 0, MAX_PADS - 1, "die Pad-Position", true), name: str(p.name, 60, "ein Pad-Name"),
         color, volume: num(p.volume, 0, 1, "eine Lautstärke"), loop: p.loop, soundId,
       };
       if (p.start !== undefined) out.start = num(p.start, 0, 86400, "ein Startpunkt");
@@ -137,8 +137,8 @@ export function buildProjectZip(
     notes: notes.map(({ id, title, text }) => ({ id, title, text })), // Reihenfolge = Reihenfolge in der Liste
     banks: banks.map((b) => ({
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount,
-      pads: Array.from({ length: b.padCount }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
-        .filter((x): x is { i: number; p: PadConfig } => !!x.p)
+      pads: Array.from({ length: MAX_PADS }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
+        .filter((x): x is { i: number; p: PadConfig } => !!x.p && (x.i < b.padCount || !isBlankPad(x.p))) // ausgeblendete Pads nur mit Inhalt
         .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut })),
     })),
   };

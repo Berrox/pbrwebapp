@@ -43,3 +43,9 @@ Pads: optionale Felder `fadeIn`, `fadeOut` (Sekunden). Die App schreibt `"versio
 
 ## Nachtrag (ausgeblendete Pads, Version 6)
 `index` eines Pads darf bis 47 reichen, auch über `padCount` der Bank hinaus. Die App schreibt `"version": 6`; Version 1 bis 5 werden weiter gelesen. Details: `docs/SICHERUNG.md`.
+
+## Nachtrag (Bankfarbe, Version 7)
+Bänke: optionales Feld `color` (`#rrggbb`). Die App schreibt `"version": 7`; Version 1 bis 6 werden weiter gelesen. Details: `docs/OBERFLAECHE.md`.
+
+## Nachtrag (EQ und Hall, Version 8)
+Pads: optionale Felder `eqLow`, `eqMid`, `eqHigh` (−12 bis 12 dB), `reverb` (0 bis 1), `reverbSize` (`room`|`hall`|`church`). Die App schreibt `"version": 8`; Version 1 bis 7 werden weiter gelesen. Details: `docs/KLANG.md`.

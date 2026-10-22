@@ -21,6 +21,7 @@
     <label class="master" title="Master-Lautstärke (alle Pads)">🔊 <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Master-Lautstärke in Prozent" /><output id="masterPct" for="masterVol">100 %</output></label>
     <span id="clock" aria-label="Uhrzeit">--:--:--</span>
     <span class="sw"><button id="swToggle" type="button" class="tab">⏱ 00:00 ▶</button><button id="swReset" type="button" class="tab" aria-label="Stoppuhr zurücksetzen" disabled>↺</button></span>
+    <button id="backupChip" type="button" class="chip" hidden></button>
     <span id="offlineState"></span>
     <span id="midiState"></span>
     <span id="status"></span>
@@ -42,6 +43,7 @@
       <button id="pLibrary" type="button" class="tab">Soundbibliothek</button>
       <button id="pImport" type="button" class="tab">Projekt importieren …</button>
       <input id="pFile" type="file" accept=".zip,application/zip" hidden />
+      <span id="backupInfo"></span>
     </div>
   </nav>
   <div id="work">

@@ -40,3 +40,6 @@ Pads: optionales Feld `note` (Text, höchstens 500 Zeichen). Die App schreibt `"
 
 ## Nachtrag (Ein-/Ausblenden, Version 5)
 Pads: optionale Felder `fadeIn`, `fadeOut` (Sekunden). Die App schreibt `"version": 5`; Version 1 bis 4 werden weiter gelesen. Details: `docs/KOPFLEISTE.md`.
+
+## Nachtrag (ausgeblendete Pads, Version 6)
+`index` eines Pads darf bis 47 reichen, auch über `padCount` der Bank hinaus. Die App schreibt `"version": 6`; Version 1 bis 5 werden weiter gelesen. Details: `docs/SICHERUNG.md`.

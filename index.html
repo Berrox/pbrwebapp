@@ -63,58 +63,84 @@
       <div id="notesList"></div>
     </aside>
   </div>
-  <dialog id="padDialog">
+  <dialog id="padDialog" aria-labelledby="padTitle">
     <form method="dialog" id="padForm">
-      <h2>Pad bearbeiten</h2>
-      <label>Name <input id="fName" maxlength="30" /></label>
-      <label>Farbe <input id="fColor" type="color" /></label>
-      <label>Lautstärke <span class="volRow"><input id="fVol" type="range" min="0" max="1" step="0.01" aria-label="Lautstärke in Prozent" /><output id="fVolPct" for="fVol">90 %</output></span></label>
-      <label><input id="fLoop" type="checkbox" /> Loop</label>
-      <label>Einblenden <span class="volRow"><input id="fFadeIn" type="range" min="0" max="10" step="0.1" aria-label="Einblendzeit in Sekunden" /><output id="fFadeInOut">aus</output></span></label>
-      <label>Ausblenden <span class="volRow"><input id="fFadeOut" type="range" min="0" max="10" step="0.1" aria-label="Ausblendzeit in Sekunden" /><output id="fFadeOutOut">aus</output></span></label>
-      <p class="hint">Ausblenden gilt beim Stoppen des Pads, bei Stop-Regeln und bei One-Shots am Ende. STOP ALL stoppt immer sofort.</p>
-      <p class="learn">Taste: <b id="fKeyLabel">–</b>
-        <button type="button" id="fKeyLearn" class="tab">Taste wählen</button>
-        <button type="button" id="fKeyClear" class="tab" aria-label="Taste entfernen">✕</button></p>
-      <p class="learn">MIDI: <b id="fMidiLabel">–</b>
-        <button type="button" id="fMidiLearn" class="tab">MIDI lernen</button>
-        <button type="button" id="fMidiClear" class="tab" aria-label="MIDI-Note entfernen">✕</button></p>
-      <details class="fxbox" id="fxBox">
-        <summary>Klang (EQ und Hall)</summary>
-        <label>Tiefen <span class="volRow"><input id="fEqLow" type="range" min="-12" max="12" step="1" aria-label="Tiefen in dB" /><output id="fEqLowOut">0 dB</output></span></label>
-        <label>Mitten <span class="volRow"><input id="fEqMid" type="range" min="-12" max="12" step="1" aria-label="Mitten in dB" /><output id="fEqMidOut">0 dB</output></span></label>
-        <label>Höhen <span class="volRow"><input id="fEqHigh" type="range" min="-12" max="12" step="1" aria-label="Höhen in dB" /><output id="fEqHighOut">0 dB</output></span></label>
-        <label>Hall <span class="volRow"><input id="fRev" type="range" min="0" max="100" step="5" aria-label="Hall-Menge in Prozent" /><output id="fRevOut">aus</output></span></label>
-        <label>Hall-Größe <select id="fRevSize"><option value="room">Raum</option><option value="hall">Halle</option><option value="church">Kirche</option></select></label>
-        <div class="row wrap"><button type="button" id="fFxPreview">Probehören</button><button type="button" id="fFxReset">Klang zurücksetzen</button></div>
-        <p class="hint">„Probehören“ spielt den Ton dieses Pads wiederholt mit den eingestellten Werten, bis du auf Stopp tippst. Änderungen sind dabei sofort hörbar. Der Hall klingt nach dem Stoppen noch kurz nach, STOP ALL schaltet ihn sofort ab. „Abbrechen“ stellt den gespeicherten Klang wieder her.</p>
-      </details>
-      <div id="fNoteRow" hidden><label>Notiz zu diesem Pad <textarea id="fNote" rows="3" maxlength="500" placeholder="z. B. nur zusammen mit Pad 3 verwenden"></textarea></label></div>
-      <fieldset class="behavior">
-        <legend>Kopieren / Tauschen</legend>
-        <label>Ziel-Pad <select id="fOpTarget"></select></label>
-        <div class="row wrap"><button type="button" id="fCopy">Dieses Pad dorthin kopieren</button><button type="button" id="fSwap">Mit Ziel tauschen</button></div>
-        <p class="hint">Wirkt sofort und schließt den Dialog; ungespeicherte Eingaben hier gehen verloren. Betroffene Pads werden gestoppt. Tasten und MIDI-Noten bleiben an ihrer Position.</p>
-      </fieldset>
-      <fieldset class="behavior">
-        <legend>Wiedergabeverhalten</legend>
-        <label>Beim Start
-          <select id="fMode">
-            <option value="parallel">Parallel abspielen</option>
-            <option value="stopSelected">Ausgewählte Pads stoppen</option>
-            <option value="group">Gruppe exklusiv abspielen</option>
-            <option value="stopOthers">Alle anderen Pads stoppen</option>
-          </select></label>
-        <p id="fModeHelp" class="hint"></p>
-        <label>Wiedergabegruppe <select id="fGroup"></select></label>
-        <div id="fTargetsRow"><b>Diese Pads stoppen:</b><div id="fTargets"></div></div>
-      </fieldset>
-      <label>Audiodatei (WAV/MP3) <input id="fFile" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" /></label>
-      <label>Oder Sound aus der Bibliothek <select id="fLibrary"><option value="">– keine Änderung –</option></select></label>
-      <p id="fSound"></p>
-      <p><button type="button" id="fEdit" class="tab">Wellenform / Schnitt …</button></p>
-      <div class="row">
-        <button value="clear" type="submit">Pad leeren</button>
+      <div class="pdHead"><span id="pdSwatch" class="pdSw"></span><div class="pdTitle"><b id="padTitle">Pad bearbeiten</b><span id="pdSub" class="mu"></span></div></div>
+      <div class="pdBody">
+        <div class="pdLeft">
+          <div id="fPreview" class="pv"></div>
+          <button type="button" id="fFxPreview" class="pdBtn">Probehören</button>
+          <label class="fl"><span class="lb">Name</span><input id="fName" maxlength="30" /></label>
+          <span class="lb">Farbe</span>
+          <div class="pal" id="fPalette"></div>
+          <label class="fl"><span class="lb">Eigene Farbe</span><input id="fColor" type="color" /></label>
+        </div>
+        <div class="pdRight">
+          <section class="tonbox">
+            <div class="tonHead"><div><b>Ton</b><div class="mu" id="fSound"></div></div><button type="button" id="fEdit" class="pdBtn">Wellenform / Schnitt …</button></div>
+            <label class="fl"><span class="lb">Neue Datei (WAV, MP3, M4A …)</span><input id="fFile" type="file" /></label>
+            <label class="fl"><span class="lb">Oder Sound aus der Bibliothek</span><select id="fLibrary"><option value="">– keine Änderung –</option></select></label>
+            <label class="sr2"><span>Lautstärke</span><span class="volRow"><input id="fVol" type="range" min="0" max="1" step="0.01" aria-label="Lautstärke in Prozent" /><output id="fVolPct" for="fVol">90 %</output></span></label>
+            <label class="sr2"><span>Loop</span><input id="fLoop" type="checkbox" class="tog" aria-label="Loop" /></label>
+            <label class="sr2"><span>Einblenden</span><span class="volRow"><input id="fFadeIn" type="range" min="0" max="10" step="0.1" aria-label="Einblendzeit in Sekunden" /><output id="fFadeInOut">aus</output></span></label>
+            <label class="sr2"><span>Ausblenden</span><span class="volRow"><input id="fFadeOut" type="range" min="0" max="10" step="0.1" aria-label="Ausblendzeit in Sekunden" /><output id="fFadeOutOut">aus</output></span></label>
+            <p class="hint">Ausblenden gilt beim Stoppen des Pads, bei Stop-Regeln und bei One-Shots am Ende. STOP ALL stoppt immer sofort.</p>
+          </section>
+          <details class="sec" id="fxBox">
+            <summary><span><b>Klang</b><span class="mu" id="sumKlang"></span></span><span class="chev">›</span></summary>
+            <div class="secBody">
+              <label class="sr2"><span>Tiefen</span><span class="volRow"><input id="fEqLow" type="range" min="-12" max="12" step="1" aria-label="Tiefen in dB" /><output id="fEqLowOut">0 dB</output></span></label>
+              <label class="sr2"><span>Mitten</span><span class="volRow"><input id="fEqMid" type="range" min="-12" max="12" step="1" aria-label="Mitten in dB" /><output id="fEqMidOut">0 dB</output></span></label>
+              <label class="sr2"><span>Höhen</span><span class="volRow"><input id="fEqHigh" type="range" min="-12" max="12" step="1" aria-label="Höhen in dB" /><output id="fEqHighOut">0 dB</output></span></label>
+              <label class="sr2"><span>Hall</span><span class="volRow"><input id="fRev" type="range" min="0" max="100" step="5" aria-label="Hall-Menge in Prozent" /><output id="fRevOut">aus</output></span></label>
+              <label class="sr2"><span>Hall-Größe</span><select id="fRevSize"><option value="room">Raum</option><option value="hall">Halle</option><option value="church">Kirche</option></select></label>
+              <div class="row wrap"><button type="button" id="fFxReset" class="pdBtn">Klang zurücksetzen</button></div>
+              <p class="hint">„Probehören“ (links unter der Vorschau) spielt den Ton wiederholt mit den eingestellten Werten, bis du auf Stopp tippst. Änderungen sind dabei sofort hörbar. Der Hall klingt nach dem Stoppen noch kurz nach, STOP ALL schaltet ihn sofort ab. „Abbrechen“ stellt den gespeicherten Klang wieder her.</p>
+            </div>
+          </details>
+          <details class="sec" id="secBehavior">
+            <summary><span><b>Verhalten</b><span class="mu" id="sumBehavior"></span></span><span class="chev">›</span></summary>
+            <div class="secBody">
+              <label class="fl"><span class="lb">Beim Start</span>
+                <select id="fMode">
+                  <option value="parallel">Parallel abspielen</option>
+                  <option value="stopSelected">Ausgewählte Pads stoppen</option>
+                  <option value="group">Gruppe exklusiv abspielen</option>
+                  <option value="stopOthers">Alle anderen Pads stoppen</option>
+                </select></label>
+              <p id="fModeHelp" class="hint"></p>
+              <label class="fl"><span class="lb">Wiedergabegruppe</span><select id="fGroup"></select></label>
+              <div id="fTargetsRow"><b>Diese Pads stoppen:</b><div id="fTargets"></div></div>
+            </div>
+          </details>
+          <details class="sec" id="secControls">
+            <summary><span><b>Steuerung</b><span class="mu" id="sumControls"></span></span><span class="chev">›</span></summary>
+            <div class="secBody">
+              <p class="learn">Taste: <b id="fKeyLabel">–</b>
+                <button type="button" id="fKeyLearn" class="pdBtn">Taste wählen</button>
+                <button type="button" id="fKeyClear" class="pdBtn" aria-label="Taste entfernen">✕</button></p>
+              <p class="learn">MIDI: <b id="fMidiLabel">–</b>
+                <button type="button" id="fMidiLearn" class="pdBtn">MIDI lernen</button>
+                <button type="button" id="fMidiClear" class="pdBtn" aria-label="MIDI-Note entfernen">✕</button></p>
+            </div>
+          </details>
+          <details class="sec" id="fNoteRow" hidden>
+            <summary><span><b>Notiz</b><span class="mu" id="sumNote"></span></span><span class="chev">›</span></summary>
+            <div class="secBody"><textarea id="fNote" rows="3" maxlength="500" aria-label="Notiz zu diesem Pad" placeholder="z. B. nur zusammen mit Pad 3 verwenden"></textarea></div>
+          </details>
+          <details class="sec" id="secCopy">
+            <summary><span><b>Kopieren / Tauschen</b><span class="mu">Pad auf ein anderes Pad übertragen</span></span><span class="chev">›</span></summary>
+            <div class="secBody">
+              <label class="fl"><span class="lb">Ziel-Pad</span><select id="fOpTarget"></select></label>
+              <div class="row wrap"><button type="button" id="fCopy" class="pdBtn">Dieses Pad dorthin kopieren</button><button type="button" id="fSwap" class="pdBtn">Mit Ziel tauschen</button></div>
+              <p class="hint">Wirkt sofort und schließt den Dialog; ungespeicherte Eingaben hier gehen verloren. Betroffene Pads werden gestoppt. Tasten und MIDI-Noten bleiben an ihrer Position.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="pdFoot">
+        <button value="clear" type="submit" class="dng">Pad leeren</button>
+        <span class="grow"></span>
         <button value="cancel" type="submit">Abbrechen</button>
         <button value="ok" type="submit" id="fOk">Speichern</button>
       </div>

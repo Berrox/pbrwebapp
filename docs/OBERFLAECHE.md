@@ -4,7 +4,7 @@
 - **Menü „Mehr“ (⋯):** Bildschirm wach halten, Notizen anzeigen, Helligkeit (100/70/40 %), Stoppuhr zurücksetzen, Status (Offline, MIDI, letzter Export). Das Menü ist nicht modal: STOP ALL und die Pads bleiben bedienbar. Es schließt per Tippen außerhalb, erneutes Tippen auf ⋯ oder Esc (Esc schließt zuerst das Menü und löst dann **nicht** STOP ALL aus).
 - **Meldungen:** kurze Einblendung unten in der Mitte (3 bis 9 Sekunden, je nach Länge). Der Text steht zusätzlich in einem versteckten Statusfeld für Screenreader.
 - **Pads:** Schriftfarbe automatisch dunkel oder weiß nach Hintergrund, lange Namen kleiner (22/18/15 px). Laufende Pads: weißer (bei hellen Pads dunkler) Rand, Fortschrittsbalken, Restzeit.
-- **Bank-Tabs:** Farbstreifen oben. Die Farbe stellst du im Bearbeiten-Modus bei den Bank-Werkzeugen („Farbe“) ein, ohne Auswahl gibt es eine feste Palettenfarbe pro Bank. Gespeichert im Projekt (Format Version 7).
+- **Bank-Tabs:** ganze Fläche des Tabs in der Bankfarbe (Schrift automatisch dunkel oder weiß), aktive Bank mit Balken unten und fetter Schrift. Die Farbe stellst du im Bearbeiten-Modus bei den Bank-Werkzeugen („Farbe“) ein, ohne Auswahl gibt es eine feste Palettenfarbe pro Bank. Gespeichert im Projekt (Format Version 7).
 - **Symbole:** einfarbige Linien-Symbole statt Emoji in den Knöpfen.
 - **Helligkeit:** legt eine halbdunkle Ebene über die Oberfläche (30 % oder 60 %). Dialoge des Bearbeiten-Modus liegen darüber und werden **nicht** mit abgedunkelt. Gespeichert pro Gerät.
 

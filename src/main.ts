@@ -10,10 +10,11 @@ import { formatDuration, formatSize, isSupportedAudioName, isValidSoundName, pad
 import { NotesStore } from "./model/notes";
 import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
-import { computeStops, type Group, type PlayMode } from "./model/playRules";
+import { bankOf, computeStops, type Group, type PlayMode } from "./model/playRules";
+import { padSubtitle, summarizeBehavior, summarizeControls, summarizeFx, summarizeNote } from "./model/padSummary";
 import { uuid } from "./model/ids";
 import { fxFromPad, isFlat, normalizeEq, normalizeReverb, type Fx, type ReverbSize } from "./model/fx";
-import { isLightColor, padFontSize } from "./model/colors";
+import { isLightColor, padFontSize, textColorFor } from "./model/colors";
 import { setIconText } from "./ui/icons";
 import { backupHint, checkExportSize, parseLastExport } from "./model/backup";
 import { formatClock, formatElapsed, formatRemaining, parseStopwatch, swElapsed, swInitial, swReset, swStart, swStop, type StopwatchState } from "./model/clock";
@@ -97,8 +98,11 @@ function renderTabs(): void {
   banks.forEach((b, i) => {
     const t = document.createElement("button");
     t.type = "button";
-    t.className = "tab" + (i === current ? " active" : "");
-    t.style.borderTop = `4px solid ${bankColor(b)}`; // Farbstreifen der Bank
+    const bc = bankColor(b), fg = textColorFor(bc);
+    t.className = "tab bankTab" + (i === current ? " active" : "");
+    t.style.background = bc; // ganze Fläche in der Bankfarbe, ohne dunklen Untergrund
+    t.style.color = fg; // Schrift automatisch dunkel oder weiß
+    t.style.borderBottomColor = i === current ? fg : "transparent"; // aktive Bank: Balken unten und fette Schrift
     const running = playing.some((id) => id.startsWith(padPrefix(b.id)));
     t.textContent = (running ? "● " : "") + b.name; // textContent: kein HTML aus Namen
     t.addEventListener("pointerdown", (e) => { e.preventDefault(); current = i; render(); void preloadBank(); }); // stoppt nichts
@@ -168,6 +172,7 @@ async function fillLibrarySelect(p: PadConfig): Promise<void> {
   try {
     for (const s of await listSounds()) {
       soundNames.set(s.id, s.name);
+      if (s.id === p.soundId) $("fSound").textContent = `${s.name} · ${formatDuration(s.duration)} · ${formatSize(s.size)}`;
       sel.append(new Option(s.name + (s.id === p.soundId ? " (aktuell)" : ""), s.id));
     }
   } catch { /* Bibliothek nicht lesbar: Auswahl bleibt leer */ }
@@ -199,6 +204,7 @@ async function importMany(files: File[]): Promise<void> {
 }
 
 function refreshLearn(): void {
+  queueMicrotask(refreshView); // Vorschau und Kurzfassungen mitziehen
   $("fKeyLabel").textContent = learning === "key" ? "Taste drücken …" : pendingKey ? keyLabel(pendingKey) : "–";
   $("fMidiLabel").textContent = learning === "midi" ? "Note spielen …"
     : pendingMidi !== undefined ? `Note ${pendingMidi} (${noteName(pendingMidi)})` : "–";
@@ -224,6 +230,9 @@ function openDialog(p: PadConfig): void {
   $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
   void fillLibrarySelect(p);
   fillBehavior(p);
+  for (const id of ["secBehavior", "secControls", "secCopy", "fNoteRow"]) ($(id) as HTMLDetailsElement).open = false; // Klang klappt nur bei Einstellungen auf
+  $("pdSub").textContent = padSubtitle(p.id, banks.find((b) => b.id === bankOf(p.id))?.name);
+  refreshView();
   dialog.showModal();
 }
 
@@ -760,6 +769,38 @@ $("fFxPreview").addEventListener("click", async () => {
 });
 engine.onChange(updatePreviewBtn);
 updatePreviewBtn();
+
+// ---- Pad-Dialog: Vorschau, Palette, Kurzfassungen ----
+const PALETTE = ["#2563eb", "#f59e0b", "#15803d", "#0f766e", "#7c3aed", "#be185d", "#facc15", "#475569"];
+PALETTE.forEach((c, i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "swatch"; b.style.background = c; b.dataset.color = c;
+  b.setAttribute("aria-label", `Farbe ${i + 1}`);
+  b.addEventListener("click", () => { $<HTMLInputElement>("fColor").value = c; refreshView(); });
+  $("fPalette").append(b);
+});
+function refreshView(): void {
+  const color = $<HTMLInputElement>("fColor").value;
+  const name = $<HTMLInputElement>("fName").value.trim();
+  const note = $<HTMLTextAreaElement>("fNote").value.trim();
+  const pv = $("fPreview");
+  pv.style.background = color;
+  pv.classList.toggle("dk", isLightColor(color));
+  pv.replaceChildren(document.createTextNode(name || "(ohne Namen)")); // Text, kein HTML
+  const hint = [pendingKey ? `[${keyLabel(pendingKey)}]` : "", pendingMidi !== undefined ? `♪${noteName(pendingMidi)}` : ""].filter(Boolean).join(" ");
+  if (hint) { const sm = document.createElement("small"); sm.textContent = hint; pv.append(sm); }
+  if (!$("fNoteRow").hidden && note) { const sm = document.createElement("small"); sm.className = "pvNote"; sm.textContent = "✎ " + note; pv.append(sm); }
+  $("padTitle").textContent = name || "Pad bearbeiten";
+  $("pdSwatch").style.background = color;
+  document.querySelectorAll<HTMLButtonElement>("#fPalette .swatch").forEach((b) => b.classList.toggle("on", b.dataset.color === color));
+  const sizeSel = $<HTMLSelectElement>("fRevSize"), grp = $<HTMLSelectElement>("fGroup");
+  $("sumKlang").textContent = summarizeFx(readFx(), sizeSel.selectedOptions[0]?.text ?? "");
+  $("sumBehavior").textContent = summarizeBehavior($<HTMLSelectElement>("fMode").value as PlayMode, grp.value ? grp.selectedOptions[0]?.text : undefined, document.querySelectorAll("#fTargets input:checked").length);
+  $("sumControls").textContent = summarizeControls(pendingKey ? keyLabel(pendingKey) : undefined, pendingMidi !== undefined ? noteName(pendingMidi) : undefined);
+  $("sumNote").textContent = summarizeNote(note);
+}
+$("padForm").addEventListener("input", refreshView);
+$("padForm").addEventListener("change", refreshView);
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");

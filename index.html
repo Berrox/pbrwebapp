@@ -31,6 +31,8 @@
     <div class="mrow"><div><b>Bildschirm wach halten</b><small id="wakeSub">nur im Live-Modus</small></div><button id="wakeBtn" type="button" class="switch" aria-pressed="false" aria-label="Bildschirm wach halten"><i></i></button></div>
     <div class="mrow"><div><b>Notizen anzeigen</b><small>Notizbereich und Pad-Notizen</small></div><button id="notesBtn" type="button" class="switch" aria-pressed="false" aria-label="Notizen anzeigen"><i></i></button></div>
     <div class="mrow"><div><b>Helligkeit</b><small>Oberfläche abdunkeln</small></div><div class="seg" id="dimSeg"><button type="button" data-dim="100">100 %</button><button type="button" data-dim="70">70 %</button><button type="button" data-dim="40">40 %</button></div></div>
+    <div class="mrow"><div><b>Globale Effekte</b><small>für Pads mit „Globale Effekte“</small></div><button id="fxGlobalSwitch" type="button" class="switch" aria-pressed="false" aria-label="Globale Effekte"><i></i></button></div>
+    <div class="mrow"><div><b>Soundeffekte &amp; Filter</b><small>Einstellungen (nur im Bearbeiten-Modus)</small></div><button id="fxOpenBtn" type="button" class="ghost" disabled>Öffnen</button></div>
     <div class="mrow"><div><b>Stoppuhr</b><small>Zurücksetzen nur bei angehaltener Uhr</small></div><button id="swReset" type="button" class="ghost" disabled>Zurücksetzen</button></div>
     <p class="st" id="offlineState"></p>
     <p class="st" id="midiState"></p>
@@ -98,6 +100,17 @@
               <p class="hint">„Probehören“ (links unter der Vorschau) spielt den Ton wiederholt mit den eingestellten Werten, bis du auf Stopp tippst. Änderungen sind dabei sofort hörbar. Der Hall klingt nach dem Stoppen noch kurz nach, STOP ALL schaltet ihn sofort ab. „Abbrechen“ stellt den gespeicherten Klang wieder her.</p>
             </div>
           </details>
+          <details class="sec" id="secEffects">
+            <summary><span><b>Effekte</b><span class="mu" id="sumEffects"></span></span><span class="chev">›</span></summary>
+            <div class="secBody">
+              <label class="fl"><span class="lb">Dieses Pad nutzt</span>
+                <select id="fFxMode"><option value="off">Keine Effekte (Original)</option><option value="global">Globale Effekte übernehmen</option><option value="own">Eigene Effekte</option></select></label>
+              <p id="fFxModeHelp" class="hint"></p>
+              <div id="fFxCards"></div>
+              <div class="row wrap"><button type="button" id="fAbA" class="pdBtn" aria-pressed="false">A: Original</button><button type="button" id="fAbB" class="pdBtn" aria-pressed="true">B: Mit Effekten</button></div>
+              <p class="hint">A/B wiederholt den Ton dieses Pads und schaltet nur die Soundeffekte um (EQ und Hall bleiben an).</p>
+            </div>
+          </details>
           <details class="sec" id="secBehavior">
             <summary><span><b>Verhalten</b><span class="mu" id="sumBehavior"></span></span><span class="chev">›</span></summary>
             <div class="secBody">
@@ -154,6 +167,16 @@
       <button type="button" id="groupAdd">+ Gruppe</button>
       <button type="button" id="groupClose">Schließen</button>
     </div>
+  </dialog>
+  <dialog id="fxDialog" aria-labelledby="fxTitle">
+    <div class="pdHead"><div class="pdTitle"><b id="fxTitle">Soundeffekte &amp; Filter</b><span class="mu">Globale Einstellungen</span></div></div>
+    <div class="gdBody">
+      <div class="mrow"><div><b>Globale Effekte</b><small>Wirken nur auf Pads mit „Globale Effekte übernehmen“</small></div><button id="fxGlobalSwitch2" type="button" class="switch" aria-pressed="false" aria-label="Globale Effekte"><i></i></button></div>
+      <div id="fxGlobalCards"></div>
+      <label class="fl"><span class="lb">Ton zum Probehören (Wiederholung)</span><select id="fxGSound"></select></label>
+      <div class="row wrap"><button type="button" id="fxGA" class="pdBtn" aria-pressed="false">A: Original</button><button type="button" id="fxGB" class="pdBtn" aria-pressed="true">B: Mit Effekten</button><button type="button" id="fxGStop" class="pdBtn">Stopp</button></div>
+    </div>
+    <div class="pdFoot"><button type="button" id="fxGReset" class="dng">Alles zurücksetzen</button><span class="grow"></span><button type="button" id="fxGClose">Fertig</button></div>
   </dialog>
   <dialog id="libraryDialog">
     <h2>Soundbibliothek</h2>

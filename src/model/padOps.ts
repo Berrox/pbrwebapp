@@ -10,13 +10,13 @@ export function normalizeFade(v: number): number | undefined {
 }
 
 /** Inhalt eines Pads. Taste und MIDI-Note gehören zur Position (Slot) und bleiben, wo sie sind. */
-const CONTENT = ["name", "color", "volume", "loop", "soundId", "start", "end", "playMode", "groupId", "stopTargets", "note", "fadeIn", "fadeOut", "eqLow", "eqMid", "eqHigh", "reverb", "reverbSize"] as const;
+const CONTENT = ["name", "color", "volume", "loop", "soundId", "start", "end", "playMode", "groupId", "stopTargets", "note", "fadeIn", "fadeOut", "eqLow", "eqMid", "eqHigh", "reverb", "reverbSize", "fxMode", "fxOwn"] as const;
 type Content = Record<(typeof CONTENT)[number], unknown>;
 
 function readContent(p: PadConfig): Content {
   const rec = p as unknown as Content;
   const out = {} as Content;
-  for (const k of CONTENT) out[k] = k === "stopTargets" && p.stopTargets ? [...p.stopTargets] : rec[k];
+  for (const k of CONTENT) out[k] = k === "stopTargets" && p.stopTargets ? [...p.stopTargets] : k === "fxOwn" && p.fxOwn ? structuredClone(p.fxOwn) : rec[k];
   return out;
 }
 function writeContent(p: PadConfig, c: Content): void {

@@ -5,18 +5,19 @@ import { MAX_PADS, isBlankPad, padId, type Bank } from "./banks";
 import { isAssignableKey } from "./keys";
 import { audioExtension, audioMime } from "./audioFormats";
 import { isReverbSize, type ReverbSize } from "./fx";
+import { defaultEffects, isFxMode, parseGlobalEffects, parseProfile, type EffectProfile, type EffectsSettings, type FxMode } from "./effects";
 import { isPlayMode, type Group, type PlayMode } from "./playRules";
 import { MAX_NOTES, NOTE_TEXT_MAX, NOTE_TITLE_MAX, type Note } from "./notes";
 
 export const FORMAT_NAME = "sampler-project";
-export const FORMAT_VERSION = 8; // 8: EQ und Hall pro Pad // 7: Farbe der Bank. 6: ausgeblendete Pads // 6: auch ausgeblendete Pads (Position über der Pad-Anzahl) werden gespeichert // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
+export const FORMAT_VERSION = 10; // 10: weitere Effekte (Vinyl, Filter, Verzerrung, Chorus, Lo-Fi, Echo) // 8: EQ und Hall pro Pad // 7: Farbe der Bank. 6: ausgeblendete Pads // 6: auch ausgeblendete Pads (Position über der Pad-Anzahl) werden gespeichert // 2: Notizen, 3: Wiedergaberegeln und Gruppen. Ältere Versionen bleiben importierbar.
 export const MAX_ZIP = 500 * 1024 * 1024, MAX_TOTAL = 800 * 1024 * 1024, MAX_FILE = 150 * 1024 * 1024;
 const MAX_ENTRIES = 3000, MAX_JSON = 5 * 1024 * 1024;
 
-export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string; fadeIn?: number; fadeOut?: number; eqLow?: number; eqMid?: number; eqHigh?: number; reverb?: number; reverbSize?: ReverbSize }
+export interface PadEntry { index: number; name: string; color: string; volume: number; loop: boolean; soundId: string | null; start?: number; end?: number; key?: string; midiNote?: number; playMode?: PlayMode; groupId?: string; stopTargets?: string[]; note?: string; fadeIn?: number; fadeOut?: number; eqLow?: number; eqMid?: number; eqHigh?: number; reverb?: number; reverbSize?: ReverbSize; fxMode?: FxMode; fxOwn?: EffectProfile }
 export interface BankEntry { id: string; name: string; columns: number; padCount: number; pads: PadEntry[]; color?: string }
 export interface SoundEntry { id: string; name: string; file: string }
-export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[]; groups: Group[] }
+export interface ProjectFile { format: string; version: number; name: string; exportedAt: string; banks: BankEntry[]; sounds: SoundEntry[]; notes: Note[]; groups: Group[]; effects: EffectsSettings }
 export interface ParsedProject { project: ProjectFile; audio: Map<string, Uint8Array>; missingSounds: string[] }
 
 export class ProjectError extends Error {}
@@ -77,6 +78,15 @@ export function validateProject(raw: unknown): ProjectFile {
         if (!isReverbSize(p.reverbSize)) fail("Das Projekt ist beschädigt: Hall-Größe ungültig.");
         out.reverbSize = p.reverbSize;
       }
+      if (p.fxMode !== undefined) {
+        if (!isFxMode(p.fxMode)) fail("Das Projekt ist beschädigt: Effekt-Modus ungültig.");
+        out.fxMode = p.fxMode;
+      }
+      if (p.fxOwn !== undefined) {
+        const own = parseProfile(p.fxOwn);
+        if (!own) fail("Das Projekt ist beschädigt: Pad-Effekte ungültig.");
+        out.fxOwn = own;
+      }
       if (p.playMode !== undefined) {
         if (!isPlayMode(p.playMode)) fail("Das Projekt ist beschädigt: Wiedergabemodus ungültig.");
         out.playMode = p.playMode;
@@ -123,6 +133,8 @@ export function validateProject(raw: unknown): ProjectFile {
     noteIds.add(id);
     return { id, title: str(n.title, NOTE_TITLE_MAX, "ein Notiztitel"), text: str(n.text, NOTE_TEXT_MAX, "ein Notiztext") };
   });
+  const effects = raw.effects === undefined ? defaultEffects() : parseGlobalEffects(raw.effects); // ältere Projekte: Effekte aus
+  if (!effects) fail("Das Projekt ist beschädigt: Soundeffekte ungültig.");
   const rawGroups = raw.groups === undefined ? [] : raw.groups; // ältere Projekte haben keine Gruppen
   if (!Array.isArray(rawGroups) || rawGroups.length > 100) fail("Das Projekt ist beschädigt: Gruppen ungültig.");
   const groupIds = new Set<string>();
@@ -133,11 +145,11 @@ export function validateProject(raw: unknown): ProjectFile {
     groupIds.add(id);
     return { id, name: str(g.name, 60, "ein Gruppenname"), crossBank: g.crossBank === true };
   });
-  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds, notes, groups };
+  return { format: FORMAT_NAME, version, name: str(raw.name, 100, "der Projektname"), exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt.slice(0, 40) : "", banks, sounds, notes, groups, effects };
 }
 
 export function buildProjectZip(
-  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[], notes: Note[] = [], groups: Group[] = [],
+  name: string, banks: Bank[], store: Map<string, PadConfig>, sounds: { id: string; name: string; bytes: Uint8Array }[], notes: Note[] = [], groups: Group[] = [], effects: EffectsSettings = defaultEffects(),
 ): Uint8Array {
   const soundEntries: SoundEntry[] = sounds.map((s) => ({
     id: s.id, name: s.name, file: `audio/${s.id}.${audioExtension(s.name) ?? "bin"}`,
@@ -146,12 +158,13 @@ export function buildProjectZip(
     format: FORMAT_NAME, version: FORMAT_VERSION, name, exportedAt: new Date().toISOString(),
     sounds: soundEntries,
     groups: groups.map(({ id, name, crossBank }) => ({ id, name, crossBank })),
+    effects,
     notes: notes.map(({ id, title, text }) => ({ id, title, text })), // Reihenfolge = Reihenfolge in der Liste
     banks: banks.map((b) => ({
       id: b.id, name: b.name, columns: b.columns, padCount: b.padCount, color: b.color,
       pads: Array.from({ length: MAX_PADS }, (_, i) => ({ i, p: store.get(padId(b.id, i)) }))
         .filter((x): x is { i: number; p: PadConfig } => !!x.p && (x.i < b.padCount || !isBlankPad(x.p))) // ausgeblendete Pads nur mit Inhalt
-        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut, eqLow: p.eqLow, eqMid: p.eqMid, eqHigh: p.eqHigh, reverb: p.reverb, reverbSize: p.reverbSize })),
+        .map(({ i, p }): PadEntry => ({ index: i, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId: p.soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId: p.groupId, stopTargets: p.stopTargets?.length ? p.stopTargets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut, eqLow: p.eqLow, eqMid: p.eqMid, eqHigh: p.eqHigh, reverb: p.reverb, reverbSize: p.reverbSize, fxMode: p.fxMode, fxOwn: p.fxOwn })),
     })),
   };
   const files: Zippable = { "project.json": strToU8(JSON.stringify(project, null, 2)) };
@@ -192,7 +205,7 @@ export function parseProjectZip(bytes: Uint8Array): ParsedProject {
 }
 
 export interface ResolvedImport {
-  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[]; notes: Note[]; groups: Group[];
+  banks: Bank[]; pads: PadConfig[]; sounds: { id: string; name: string; bytes: Uint8Array; mime: string }[]; warnings: string[]; notes: Note[]; groups: Group[]; effects: EffectsSettings;
 }
 /** Wandelt das geprüfte Projekt in App-Daten um. Pads mit fehlender Audiodatei werden leer markiert. */
 export function resolveImport(parsed: ParsedProject): ResolvedImport {
@@ -208,7 +221,7 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
       if (groupId && !groupIds.has(groupId)) { warnings.push(`„${p.name || "Pad"}“: Wiedergabegruppe fehlt`); groupId = undefined; }
       const targets = (p.stopTargets ?? []).filter((t) => t !== selfId && known.has(t)); // Selbstzuordnung und tote Verweise entfernen
       if ((p.stopTargets?.length ?? 0) !== targets.length) warnings.push(`„${p.name || "Pad"}“: ungültige Stop-Ziele entfernt`);
-      pads.push({ id: selfId, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId, stopTargets: targets.length ? targets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut, eqLow: p.eqLow, eqMid: p.eqMid, eqHigh: p.eqHigh, reverb: p.reverb, reverbSize: p.reverbSize });
+      pads.push({ id: selfId, name: p.name, color: p.color, volume: p.volume, loop: p.loop, soundId, start: p.start, end: p.end, key: p.key, midiNote: p.midiNote, playMode: p.playMode, groupId, stopTargets: targets.length ? targets : undefined, note: p.note, fadeIn: p.fadeIn, fadeOut: p.fadeOut, eqLow: p.eqLow, eqMid: p.eqMid, eqHigh: p.eqHigh, reverb: p.reverb, reverbSize: p.reverbSize, fxMode: p.fxMode, fxOwn: p.fxOwn });
     }
     return { id: b.id, name: b.name, columns: b.columns, padCount: b.padCount, color: b.color };
   });
@@ -216,5 +229,5 @@ export function resolveImport(parsed: ParsedProject): ResolvedImport {
     id: s.id, name: s.name, bytes: parsed.audio.get(s.id)!,
     mime: audioMime(s.name),
   }));
-  return { banks, pads, sounds, warnings, notes: parsed.project.notes, groups: parsed.project.groups };
+  return { banks, pads, sounds, warnings, notes: parsed.project.notes, groups: parsed.project.groups, effects: parsed.project.effects };
 }

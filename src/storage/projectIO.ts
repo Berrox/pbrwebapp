@@ -5,15 +5,16 @@ import type { Bank } from "../model/banks";
 import { contentHash } from "../model/ids";
 import type { Note } from "../model/notes";
 import type { Group } from "../model/playRules";
+import type { EffectsSettings } from "../model/effects";
 import { buildProjectZip, type ResolvedImport } from "../model/projectFormat";
 
 /** Uint8Array → Blob (Typ-Umweg wegen neuerer TypeScript-Versionen). */
 export const toBlob = (bytes: Uint8Array, type: string): Blob => new Blob([bytes as unknown as BlobPart], { type });
 
-export async function exportProject(name: string, banks: Bank[], store: Map<string, PadConfig>, notes: Note[], groups: Group[]): Promise<Uint8Array> {
+export async function exportProject(name: string, banks: Bank[], store: Map<string, PadConfig>, notes: Note[], groups: Group[], effects: EffectsSettings): Promise<Uint8Array> {
   const stored = await loadAllSounds();
   const sounds = await Promise.all(stored.map(async (s) => ({ id: s.id, name: s.name, bytes: new Uint8Array(await s.blob.arrayBuffer()) })));
-  return buildProjectZip(name, banks, store, sounds, notes, groups);
+  return buildProjectZip(name, banks, store, sounds, notes, groups, effects);
 }
 
 export async function importResolved(r: ResolvedImport): Promise<void> {
@@ -21,5 +22,5 @@ export async function importResolved(r: ResolvedImport): Promise<void> {
     id: s.id, name: s.name, size: s.bytes.length, blob: toBlob(s.bytes, s.mime),
     hash: await contentHash(s.bytes.buffer.slice(s.bytes.byteOffset, s.bytes.byteOffset + s.bytes.byteLength) as ArrayBuffer),
   })));
-  await replaceAllData({ banks: r.banks, pads: r.pads, sounds, notes: r.notes, groups: r.groups }); // erst hier wird das alte Projekt ersetzt
+  await replaceAllData({ banks: r.banks, pads: r.pads, sounds, notes: r.notes, groups: r.groups, effects: r.effects }); // erst hier wird das alte Projekt ersetzt
 }

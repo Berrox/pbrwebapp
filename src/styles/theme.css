@@ -202,3 +202,15 @@ details[open] > summary .chev { transform: rotate(90deg); }
 @media (max-width: 760px) { .pdBody { flex-direction: column; } .pdLeft { width: auto; } }
 .bankTab { border: 0; border-bottom: 4px solid transparent; font-weight: 600; }
 .bankTab.active { font-weight: 800; }
+#fxDialog { width: min(720px, 96vw); padding: 0; overflow: hidden; }
+#fxDialog[open] { display: flex; flex-direction: column; }
+.gdBody { padding: 12px 20px; overflow: auto; max-height: 68vh; }
+.fxcard { background: var(--bg); border: 1px solid #2b2e36; border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+.fxHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fxHead b { display: block; font-size: 1.05rem; }
+.fxBody { margin-top: 10px; }
+.fxBody[hidden], #fFxCards[hidden] { display: none; }
+.fxBody details { margin-top: 8px; }
+.fxBody summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--muted); }
+#fxGClose { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pdBtn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }

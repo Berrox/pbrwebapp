@@ -1,7 +1,7 @@
 import "./styles/theme.css";
-import { AudioEngine } from "./audio/AudioEngine";
+import { AudioEngine, type PlayOptions } from "./audio/AudioEngine";
 import {
-  deleteBankData, deleteNote, deletePad, loadGroups, saveGroups, loadNotes, saveNote, saveNoteOrder, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
+  deleteBankData, deleteNote, deletePad, loadEffects, saveEffects, loadGroups, saveGroups, loadNotes, saveNote, saveNoteOrder, deleteSound, getSound, importSound, listSounds, renameSound, setSoundDuration, loadBanks, loadPads, savePad, saveBanks, type PadConfig,
 } from "./storage/db";
 import { openSampleEditor } from "./ui/SampleEditor";
 import { findConflict, isAssignableKey, keyLabel } from "./model/keys";
@@ -11,8 +11,10 @@ import { NotesStore } from "./model/notes";
 import { mountNotes } from "./ui/NotesPanel";
 import { AUDIO_ACCEPT } from "./model/audioFormats";
 import { bankOf, computeStops, type Group, type PlayMode } from "./model/playRules";
-import { padSubtitle, summarizeBehavior, summarizeControls, summarizeFx, summarizeNote } from "./model/padSummary";
+import { padSubtitle, summarizeBehavior, summarizeControls, summarizeEffects, summarizeFx, summarizeNote } from "./model/padSummary";
 import { uuid } from "./model/ids";
+import { defaultEffects, defaultProfile, hasActiveEffects, resolveProfile, type EffectProfile, type EffectsSettings, type FxMode } from "./model/effects";
+import { renderEffectCards } from "./ui/effectCards";
 import { fxFromPad, isFlat, normalizeEq, normalizeReverb, type Fx, type ReverbSize } from "./model/fx";
 import { isLightColor, padFontSize, textColorFor } from "./model/colors";
 import { setIconText } from "./ui/icons";
@@ -43,6 +45,8 @@ let pendingKey: string | undefined;
 let pendingMidi: number | undefined;
 
 let groups: Group[] = [];
+let globalFx: EffectsSettings = defaultEffects(); // globale Soundeffekte (Schnellschalter + Einstellungen)
+let pendingOwn: EffectProfile = defaultProfile(); // eigene Effekte des gerade bearbeiteten Pads (noch nicht gespeichert)
 const padLive = new Map<string, { fill: HTMLElement; tm: HTMLElement }>(); // Fortschrittsanzeige der laufenden Pads
 const notesStore = new NotesStore({ loadAll: loadNotes, save: saveNote, saveOrder: saveNoteOrder, remove: deleteNote });
 const notesUI = mountNotes({
@@ -158,7 +162,7 @@ async function onPad(p: PadConfig): Promise<void> {
     if (!buf) { say(`„${p.name}“: Audiodatei fehlt oder ist defekt.`); return; }
     engine.play(p.id, buf, {
       volume: p.volume, loop: p.loop, start: p.start, end: p.end,
-      fadeIn: p.fadeIn, fadeOut: p.fadeOut, fx: fxFromPad(p),
+      fadeIn: p.fadeIn, fadeOut: p.fadeOut, fx: fxFromPad(p), fxProfile: fxFor(p) ?? undefined,
       stopIds: computeStops(p, engine.playingIds(), (id) => store.get(id), groups), // erst jetzt ausgewertet, direkt vor dem Start
     });
     if (!engine.running) say("Audio wird reaktiviert … (Display einmal berühren, falls nichts zu hören ist)");
@@ -221,6 +225,7 @@ function openDialog(p: PadConfig): void {
   $<HTMLInputElement>("fFadeOut").value = String(p.fadeOut ?? 0);
   showFades();
   fillFx(p);
+  fillEffects(p);
   fillOpTargets(p);
   $("fNoteRow").hidden = !notesUI.visible; // Notizfeld nur bei "Notizen: AN"
   $<HTMLTextAreaElement>("fNote").value = p.note ?? "";
@@ -230,8 +235,9 @@ function openDialog(p: PadConfig): void {
   $("fSound").textContent = p.soundId ? "Audiodatei zugewiesen." : "Noch keine Audiodatei.";
   void fillLibrarySelect(p);
   fillBehavior(p);
-  for (const id of ["secBehavior", "secControls", "secCopy", "fNoteRow"]) ($(id) as HTMLDetailsElement).open = false; // Klang klappt nur bei Einstellungen auf
+  for (const id of ["secBehavior", "secControls", "secCopy", "secEffects", "fNoteRow"]) ($(id) as HTMLDetailsElement).open = false; // Klang klappt nur bei Einstellungen auf
   $("pdSub").textContent = padSubtitle(p.id, banks.find((b) => b.id === bankOf(p.id))?.name);
+  ($("secEffects") as HTMLDetailsElement).open = (p.fxMode ?? "off") !== "off"; // klappt auf, wenn das Pad Effekte nutzt
   refreshView();
   dialog.showModal();
 }
@@ -245,7 +251,7 @@ dialog.addEventListener("close", async () => {
   let conflictMsg = "";
   if (action === "clear") {
     engine.stop(p.id);
-    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined, fadeIn: undefined, fadeOut: undefined, eqLow: undefined, eqMid: undefined, eqHigh: undefined, reverb: undefined, reverbSize: undefined });
+    Object.assign(p, { name: "", soundId: null, start: undefined, end: undefined, key: undefined, midiNote: undefined, playMode: undefined, groupId: undefined, stopTargets: undefined, note: undefined, fadeIn: undefined, fadeOut: undefined, eqLow: undefined, eqMid: undefined, eqHigh: undefined, reverb: undefined, reverbSize: undefined, fxMode: undefined, fxOwn: undefined });
   } else if (action === "ok") {
     p.name = $<HTMLInputElement>("fName").value.trim();
     p.color = $<HTMLInputElement>("fColor").value;
@@ -259,6 +265,10 @@ dialog.addEventListener("close", async () => {
     p.reverb = normalizeReverb(fx.reverb);
     p.reverbSize = p.reverb ? fx.size : undefined;
     engine.setEffects(p.id, fxFromPad(p));
+    const fm = $<HTMLSelectElement>("fFxMode").value as FxMode;
+    p.fxMode = fm === "off" ? undefined : fm;
+    p.fxOwn = fm === "own" || hasActiveEffects(pendingOwn) ? structuredClone(pendingOwn) : undefined; // eigene Einstellungen auch dann behalten, wenn Effekte an sind
+    engine.setProfile(p.id, fxFor(p));
     const pads = makePads(cur(), store);
     const kc = findConflict(pads, p.id, "key", pendingKey), mc = findConflict(pads, p.id, "midiNote", pendingMidi);
     if (kc) conflictMsg += `Taste ${keyLabel(pendingKey!)} ist schon an „${kc.name || "Pad"}“ vergeben und wurde nicht übernommen. `;
@@ -282,7 +292,7 @@ dialog.addEventListener("close", async () => {
       p.start = undefined; p.end = undefined; // neuer Sound: alter Schnitt gilt nicht mehr
       if (!p.name) p.name = newName.replace(/\.[^.]+$/, "");
     }
-  } else { engine.setVolume(p.id, p.volume); engine.setEffects(p.id, fxFromPad(p)); render(); return; } // Abbrechen: Lautstärke zurücksetzen
+  } else { engine.setVolume(p.id, p.volume); engine.setEffects(p.id, fxFromPad(p)); engine.setProfile(p.id, fxFor(p)); render(); return; } // Abbrechen: Lautstärke zurücksetzen
   try { await savePad(p); say(conflictMsg || "Gespeichert."); }
   catch { say("Speichern fehlgeschlagen (Speicher voll?)."); }
   render();
@@ -356,7 +366,7 @@ $("pExport").addEventListener("click", async () => {
   projectName = name;
   try {
     say("Erzeuge ZIP …");
-    const bytes = await exportProject(name, banks, store, notesStore.notes, groups);
+    const bytes = await exportProject(name, banks, store, notesStore.notes, groups, globalFx);
     const url = URL.createObjectURL(toBlob(bytes, "application/zip"));
     const a = document.createElement("a");
     a.href = url; a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
@@ -386,7 +396,7 @@ $<HTMLInputElement>("pFile").addEventListener("change", async (e) => {
     await importResolved(r); // atomar: bei Fehler bleibt das alte Projekt unverändert
     notesStore.replaceAll(r.notes);
     store.clear(); r.pads.forEach((p) => store.set(p.id, p));
-    banks = r.banks; current = 0; groups = r.groups; buffers.clear(); decodedBytes = 0; projectName = parsed.project.name; void preloadBank();
+    banks = r.banks; current = 0; groups = r.groups; globalFx = r.effects; renderGlobalFx(); buffers.clear(); decodedBytes = 0; projectName = parsed.project.name; void preloadBank();
     render();
     say("Projekt importiert." + (r.warnings.length ? ` ${r.warnings.length} Hinweis(e), z. B.: ${r.warnings[0]}.` : ""));
   } catch (err) {
@@ -749,24 +759,7 @@ function updatePreviewBtn(): void {
   const on = engine.isPlaying(PREVIEW_ID);
   setIconText($("fFxPreview"), on ? "stop" : "play", on ? "Stopp" : "Probehören");
 }
-$("fFxPreview").addEventListener("click", async () => {
-  if (engine.isPlaying(PREVIEW_ID)) { engine.stop(PREVIEW_ID); return; }
-  const p = editing;
-  const soundId = $<HTMLSelectElement>("fLibrary").value || p?.soundId; // auch ein in der Bibliothek gewählter Sound
-  if (!p || !soundId) {
-    say($<HTMLInputElement>("fFile").files?.length ? "Neue Datei zuerst speichern, dann probehören." : "Zuerst eine Audiodatei zuweisen und speichern.");
-    return;
-  }
-  engine.unlock();
-  const buf = await bufferFor(soundId);
-  if (!buf) { say("Audiodatei fehlt oder ist defekt."); return; }
-  const same = soundId === p.soundId; // Schnittpunkte gelten nur für den gespeicherten Sound des Pads
-  engine.play(PREVIEW_ID, buf, {
-    volume: Number($<HTMLInputElement>("fVol").value), loop: true, // Wiederholen, damit man beim Einstellen weiter hört
-    start: same ? p.start : undefined, end: same ? p.end : undefined,
-    fx: readFx(), forceChain: true,
-  });
-});
+$("fFxPreview").addEventListener("click", () => void startPadPreview());
 engine.onChange(updatePreviewBtn);
 updatePreviewBtn();
 
@@ -798,9 +791,128 @@ function refreshView(): void {
   $("sumBehavior").textContent = summarizeBehavior($<HTMLSelectElement>("fMode").value as PlayMode, grp.value ? grp.selectedOptions[0]?.text : undefined, document.querySelectorAll("#fTargets input:checked").length);
   $("sumControls").textContent = summarizeControls(pendingKey ? keyLabel(pendingKey) : undefined, pendingMidi !== undefined ? noteName(pendingMidi) : undefined);
   $("sumNote").textContent = summarizeNote(note);
+  $("sumEffects").textContent = summarizeEffects($<HTMLSelectElement>("fFxMode").value as FxMode, pendingOwn, globalFx);
 }
 $("padForm").addEventListener("input", refreshView);
 $("padForm").addEventListener("change", refreshView);
+
+// ---- Soundeffekte & Filter (Tape, Radio/Telefon) ----
+const fxFor = (p: PadConfig): EffectProfile | null => resolveProfile(p, globalFx);
+function refreshGlobalFxVoices(): void { // laufende Pads im Modus "Global" folgen den globalen Einstellungen sofort
+  for (const id of engine.playingIds()) { const p = store.get(id); if (p?.fxMode === "global") engine.setProfile(id, fxFor(p)); }
+}
+let fxSaveTimer: number | undefined;
+function persistGlobalFx(): void {
+  clearTimeout(fxSaveTimer);
+  fxSaveTimer = window.setTimeout(async () => {
+    try { await saveEffects(globalFx); } catch { say("Speichern der Effekte fehlgeschlagen (Speicher voll?)."); }
+  }, 300);
+}
+function renderGlobalFx(): void {
+  for (const id of ["fxGlobalSwitch", "fxGlobalSwitch2"]) $(id).setAttribute("aria-pressed", String(globalFx.enabled));
+}
+function toggleGlobalFx(): void { globalFx.enabled = !globalFx.enabled; renderGlobalFx(); persistGlobalFx(); refreshGlobalFxVoices(); }
+$("fxGlobalSwitch").addEventListener("click", toggleGlobalFx);
+$("fxGlobalSwitch2").addEventListener("click", toggleGlobalFx);
+
+/** A/B-Vergleich: Original gegen mit Effekten. Eine Vorschau-Stimme, die Effekte werden live umgeschaltet. */
+interface PreviewTarget { buf: AudioBuffer; volume: number; start?: number; end?: number }
+function setupAB(idA: string, idB: string, getTarget: () => Promise<PreviewTarget | null>, getProfile: () => EffectProfile | null, extra?: () => Partial<PlayOptions>) {
+  let state: "A" | "B" = "B";
+  const show = () => { $(idA).setAttribute("aria-pressed", String(state === "A")); $(idB).setAttribute("aria-pressed", String(state === "B")); };
+  const profile = () => (state === "A" ? null : getProfile());
+  const pick = async (s: "A" | "B") => {
+    state = s; show();
+    if (engine.isPlaying(PREVIEW_ID)) { engine.setProfile(PREVIEW_ID, profile()); return; }
+    const t = await getTarget();
+    if (!t) return;
+    engine.unlock();
+    engine.play(PREVIEW_ID, t.buf, { volume: t.volume, loop: true, start: t.start, end: t.end, fxProfile: profile() ?? defaultProfile(), forceFx: true, ...extra?.() });
+  };
+  $(idA).addEventListener("click", () => void pick("A"));
+  $(idB).addEventListener("click", () => void pick("B"));
+  show();
+  return { start: (s: "A" | "B" = "B") => pick(s), refresh: () => { if (engine.isPlaying(PREVIEW_ID)) engine.setProfile(PREVIEW_ID, profile()); } };
+}
+
+// Pad-Dialog: Effekt-Modus und eigene Effekte
+const FX_HELP: Record<FxMode, string> = {
+  off: "Das Pad klingt wie die Originaldatei (EQ und Hall wirken unabhängig davon).",
+  global: "Nutzt die Einstellungen aus Mehr > Soundeffekte & Filter. Sie wirken nur, wenn „Globale Effekte“ im Menü Mehr eingeschaltet sind.",
+  own: "Eigene Effekte nur für dieses Pad.",
+};
+function syncFxMode(): void {
+  const m = $<HTMLSelectElement>("fFxMode").value as FxMode;
+  $("fFxModeHelp").textContent = FX_HELP[m];
+  $("fFxCards").hidden = m !== "own";
+}
+function renderOwnCards(): void { renderEffectCards($("fFxCards"), pendingOwn, (np) => { pendingOwn = np; applyPadFxLive(); }); }
+function fillEffects(p: PadConfig): void {
+  $<HTMLSelectElement>("fFxMode").value = p.fxMode ?? "off";
+  pendingOwn = structuredClone(p.fxOwn ?? defaultProfile());
+  renderOwnCards();
+  syncFxMode();
+}
+const currentPadProfile = (): EffectProfile | null => resolveProfile({ fxMode: $<HTMLSelectElement>("fFxMode").value as FxMode, fxOwn: pendingOwn }, globalFx);
+/** Für die Vorschau gilt das globale Profil auch dann, wenn der Schnellschalter aus ist. */
+const padPreviewProfile = (): EffectProfile | null => ($<HTMLSelectElement>("fFxMode").value === "global" ? globalFx.profile : currentPadProfile());
+function applyPadFxLive(): void {
+  if (editing) engine.setProfile(editing.id, currentPadProfile());
+  padAB.refresh();
+  refreshView();
+}
+async function padPreviewTarget(): Promise<PreviewTarget | null> {
+  const p = editing;
+  const soundId = $<HTMLSelectElement>("fLibrary").value || p?.soundId; // auch ein in der Bibliothek gewählter Sound
+  if (!p || !soundId) {
+    say($<HTMLInputElement>("fFile").files?.length ? "Neue Datei zuerst speichern, dann probehören." : "Zuerst eine Audiodatei zuweisen und speichern.");
+    return null;
+  }
+  const buf = await bufferFor(soundId);
+  if (!buf) { say("Audiodatei fehlt oder ist defekt."); return null; }
+  const same = soundId === p.soundId; // Schnittpunkte gelten nur für den gespeicherten Sound des Pads
+  return { buf, volume: Number($<HTMLInputElement>("fVol").value), start: same ? p.start : undefined, end: same ? p.end : undefined };
+}
+const padAB = setupAB("fAbA", "fAbB", padPreviewTarget, padPreviewProfile, () => ({ fx: readFx(), forceChain: true }));
+async function startPadPreview(): Promise<void> {
+  if (engine.isPlaying(PREVIEW_ID)) { engine.stop(PREVIEW_ID); return; }
+  await padAB.start("B");
+}
+$("fFxMode").addEventListener("change", () => { syncFxMode(); applyPadFxLive(); });
+
+// Globale Einstellungen (Menü Mehr > Soundeffekte & Filter)
+const fxDialog = $<HTMLDialogElement>("fxDialog");
+const globalAB = setupAB("fxGA", "fxGB", async () => {
+  const id = $<HTMLSelectElement>("fxGSound").value;
+  if (!id) { say("Bitte unten einen Ton zum Probehören wählen."); return null; }
+  const buf = await bufferFor(id);
+  if (!buf) { say("Audiodatei fehlt oder ist defekt."); return null; }
+  return { buf, volume: 0.9 };
+}, () => globalFx.profile);
+function renderGlobalCards(): void {
+  renderEffectCards($("fxGlobalCards"), globalFx.profile, (p) => { globalFx.profile = p; persistGlobalFx(); refreshGlobalFxVoices(); globalAB.refresh(); });
+}
+async function fillGlobalSounds(): Promise<void> {
+  const sel = $<HTMLSelectElement>("fxGSound"), keep = sel.value;
+  sel.replaceChildren(new Option("– Ton wählen –", ""));
+  try { for (const s of await listSounds()) sel.append(new Option(s.name, s.id)); } catch { /* Bibliothek nicht lesbar */ }
+  sel.value = keep || makePads(cur(), store).find((q) => q.soundId)?.soundId || "";
+}
+$("fxOpenBtn").addEventListener("click", async () => {
+  moreMenu.close();
+  await fillGlobalSounds();
+  renderGlobalCards();
+  renderGlobalFx();
+  fxDialog.showModal();
+});
+$("fxGClose").addEventListener("click", () => fxDialog.close());
+$("fxGStop").addEventListener("click", () => engine.stop(PREVIEW_ID));
+fxDialog.addEventListener("close", () => engine.stop(PREVIEW_ID));
+$("fxGReset").addEventListener("click", () => {
+  if (!confirm("Alle globalen Effekte auf die Standardwerte zurücksetzen?")) return;
+  globalFx.profile = defaultProfile();
+  renderGlobalCards(); persistGlobalFx(); refreshGlobalFxVoices(); globalAB.refresh();
+});
 
 $("stopAll").addEventListener("pointerdown", (e) => { e.preventDefault(); engine.stopAll(); });
 const modeBtn = $("modeBtn");
@@ -814,6 +926,7 @@ function setMode(edit: boolean): void {
   $("projectTools").hidden = !edit;
   notesUI.setEditable(edit); // im Live-Modus sind Notizen nur lesbar
   wake.setLive(!edit); // Bildschirm nur im Live-Modus wach halten
+  ($("fxOpenBtn") as HTMLButtonElement).disabled = !edit; // Effekt-Einstellungen nur im Bearbeiten-Modus
   try { localStorage.setItem("sampler.mode", edit ? "edit" : "live"); } catch { /* egal */ }
   render();
 }
@@ -875,6 +988,7 @@ async function start(): Promise<void> {
     await saveBanks(banks);
   }
   try { groups = await loadGroups(); } catch { say("Gruppen konnten nicht geladen werden."); }
+  try { const e = await loadEffects(); if (e) globalFx = e; } catch { say("Effekte konnten nicht geladen werden."); }
   try { await notesStore.load(); } catch { say("Notizen konnten nicht geladen werden."); }
   for (const p of savedPads) store.set(p.id, p);
   for (const { oldId, pad } of migrateLegacy(savedPads, banks[0].id)) { // Übernahme aus M1
@@ -896,6 +1010,7 @@ async function start(): Promise<void> {
   applyMaster(m, false);
   try { wantWake = localStorage.getItem("sampler.wake") === "on"; } catch { /* egal */ }
   wake.setEnabled(wantWake);
+  renderGlobalFx(); // Schalter "Globale Effekte" auf den gespeicherten Zustand setzen
   $<HTMLInputElement>("fFile").accept = AUDIO_ACCEPT;
   $<HTMLInputElement>("libFiles").accept = AUDIO_ACCEPT;
   void preloadBank();

@@ -1,6 +1,7 @@
 // Kurzfassungen für den Pad-Dialog (zugeklappte Bereiche). Reine Logik, ohne Browser.
 import type { Fx } from "./fx";
 import type { PlayMode } from "./playRules";
+import { KIND_SHORT, activeKinds, type EffectProfile, type EffectsSettings, type FxMode } from "./effects";
 
 const sign = (v: number): string => `${v > 0 ? "+" : ""}${v}`;
 const MODE_NAME: Record<PlayMode, string> = {
@@ -27,4 +28,12 @@ export function padSubtitle(padId: string, bankName: string | undefined): string
   const n = Number(padId.slice(padId.lastIndexOf(":") + 1)) + 1;
   const pad = Number.isFinite(n) ? `Pad ${n}` : "Pad";
   return bankName ? `${pad} · Bank „${bankName}“` : pad;
+}
+
+const activeNames = (p: EffectProfile): string => activeKinds(p).map((k) => KIND_SHORT[k]).join(" + ");
+/** Kurzfassung der Soundeffekte & Filter eines Pads, z. B. "Global (aus): Tape". */
+export function summarizeEffects(mode: FxMode, own: EffectProfile, global: EffectsSettings): string {
+  if (mode === "off") return "Keine (Original)";
+  if (mode === "own") return `Eigene: ${activeNames(own) || "nichts aktiv"}`;
+  return `Global${global.enabled ? "" : " (aus)"}: ${activeNames(global.profile) || "nichts aktiv"}`;
 }

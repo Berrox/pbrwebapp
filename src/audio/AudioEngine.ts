@@ -2,6 +2,8 @@
 import { EQ_FREQS, isFlat, type Fx, type ReverbSize } from "../model/fx";
 import { clampRegion } from "../model/region";
 import { generateIR } from "./reverbIR";
+import { createFxChain, generateCrackle, generateNoise, type FxChain } from "./effectsChain";
+import { KINDS, activeKinds, defaultProfile, hasActiveEffects, type EffectProfile } from "../model/effects";
 
 /** start/end in Sekunden (nicht destruktiv). fadeIn/fadeOut in Sekunden. Fehlen start und end, läuft das ganze Sample. */
 export interface PlayOptions {
@@ -9,6 +11,8 @@ export interface PlayOptions {
   fadeIn?: number; fadeOut?: number;
   fx?: Fx; // EQ und Hall; fehlt oder alles aus = keine zusätzlichen Audio-Knoten
   forceChain?: boolean; // Effektkette auch bei "alles aus" aufbauen (Probehören: spätere Änderungen ohne Umbau)
+  fxProfile?: EffectProfile; // Soundeffekte & Filter (Tape, Radio); fehlt oder alles aus = keine zusätzlichen Knoten
+  forceFx?: boolean; // Effektkette auch bei "alles aus" aufbauen (Probehören, A/B-Vergleich)
 }
 interface Voice {
   src: AudioBufferSourceNode; gain: GainNode;
@@ -16,6 +20,7 @@ interface Voice {
   autoFadeSec: number; // Ausblendzeit am natürlichen Ende (nur One-Shot), bereits begrenzt
   t0: number; len: number; loop: boolean; endAt?: number;
   chain?: Chain;
+  fx?: FxChain; // Soundeffekte & Filter dieser Wiedergabe
 }
 /** Effektkette eines Pads: Gain -> Tiefen -> Mitten -> Höhen -> Dry -> Master, plus Send -> Hall-Bus. */
 interface Chain { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode; dry: GainNode; send: GainNode; size: ReverbSize; connected: boolean }
@@ -32,6 +37,9 @@ export class AudioEngine {
   private voices = new Map<string, Voice>(); // genau eine aktive Wiedergabe pro Pad
   private fading = new Set<Voice>();         // gestoppte Pads, die noch ausblenden (STOP ALL erfasst sie)
   private buses = new Map<ReverbSize, { conv: ConvolverNode; out: GainNode }>(); // gemeinsamer Hall je Größe
+  private noiseBuf: AudioBuffer | null = null;
+  private crackleBuf: AudioBuffer | null = null;
+  private tails = new Set<FxChain>(); // Ketten beendeter Wiedergaben, deren Echo noch ausklingt
   private listeners = new Set<() => void>();
 
   private getCtx(): AudioContext {
@@ -110,11 +118,14 @@ export class AudioEngine {
 
     const voice: Voice = { src, gain, fadeOutSec: fadeOut, autoFadeSec: autoOut, t0, len: Number.isFinite(len) ? len : NaN, loop: o.loop, endAt };
     this.voices.set(padId, voice);
+    if (o.fxProfile && (o.forceFx || hasActiveEffects(o.fxProfile))) voice.fx = createFxChain(ctx, o.fxProfile, gain, this.fxRes(), o.forceFx ? KINDS : activeKinds(o.fxProfile));
     if (o.fx && (o.forceChain || !isFlat(o.fx))) this.buildChain(voice, o.fx);
+    else if (voice.fx) this.route(voice);
     else gain.connect(this.master!); // ohne Effekte direkt zum Master, wie bisher
     src.onended = () => {
       src.disconnect(); gain.disconnect();
       if (voice.chain) for (const n of [voice.chain.low, voice.chain.mid, voice.chain.high, voice.chain.dry, voice.chain.send]) n.disconnect();
+      this.endFx(voice.fx); // Rauschen, Knistern und Schwankungen dieser Wiedergabe beenden
       this.fading.delete(voice);
       if (this.voices.get(padId) === voice) { this.voices.delete(padId); this.emit(); }
     };
@@ -149,6 +160,51 @@ export class AudioEngine {
     }
   }
 
+  /** Verbindet Pad-Lautstärke -> [Soundeffekte] -> [EQ/Hall] -> Master neu. */
+  private route(v: Voice): void {
+    v.gain.disconnect();
+    v.fx?.output.disconnect();
+    const target: AudioNode = v.chain ? v.chain.low : this.master!;
+    if (v.fx) { v.gain.connect(v.fx.input); v.fx.output.connect(target); } else v.gain.connect(target);
+  }
+  /** Gemeinsame Rausch- und Knistermuster für alle Wiedergaben (werden nur einmal erzeugt). */
+  private fxRes(): { noise: AudioBuffer; crackle: AudioBuffer } {
+    const ctx = this.ctx!;
+    const make = (data: Float32Array) => { const b = ctx.createBuffer(1, data.length, ctx.sampleRate); b.copyToChannel(data, 0); return b; };
+    if (!this.noiseBuf) this.noiseBuf = make(generateNoise(ctx.sampleRate));
+    if (!this.crackleBuf) this.crackleBuf = make(generateCrackle(ctx.sampleRate));
+    return { noise: this.noiseBuf, crackle: this.crackleBuf };
+  }
+  /** Ende einer Wiedergabe: Quellen sofort beenden, ein Echo-Nachhall klingt noch kurz aus (STOP ALL beendet ihn sofort). */
+  private endFx(fx: FxChain | undefined): void {
+    if (!fx) return;
+    fx.release();
+    const t = fx.tail();
+    if (t <= 0) { fx.dispose(); return; }
+    this.tails.add(fx);
+    setTimeout(() => { fx.dispose(); this.tails.delete(fx); }, t * 1000);
+  }
+  /**
+   * Soundeffekte eines laufenden Pads ändern (weich, ohne Neustart). null = Original (Effekte neutral).
+   * Hat das Pad noch keine Effektkette, wird sie bei Bedarf eingebaut.
+   */
+  setProfile(padId: string, profile: EffectProfile | null): void {
+    const v = this.voices.get(padId);
+    if (!v || !this.ctx) return;
+    const p = profile ?? defaultProfile();
+    if (v.fx) {
+      const need = activeKinds(p);
+      if (need.every((k) => v.fx!.modules.has(k))) { v.fx.update(p); return; }
+      // Ein noch nicht gebauter Effekt wird eingeschaltet: Kette einmal neu aufbauen (bisherige Effekte bleiben erhalten)
+      const old = v.fx, kinds = KINDS.filter((k) => old.modules.has(k) || need.includes(k));
+      v.fx = createFxChain(this.ctx, p, v.gain, this.fxRes(), kinds);
+      this.route(v);
+      old.dispose();
+      return;
+    }
+    if (profile && hasActiveEffects(profile)) { v.fx = createFxChain(this.ctx, profile, v.gain, this.fxRes(), activeKinds(profile)); this.route(v); }
+  }
+
   /** EQ und Hall eines laufenden Pads ändern (weich). Hat es noch keine Effektkette, wird sie bei Bedarf eingebaut. */
   setEffects(padId: string, fx: Fx): void {
     const v = this.voices.get(padId);
@@ -158,7 +214,6 @@ export class AudioEngine {
   }
   private buildChain(v: Voice, fx: Fx): void {
     const ctx = this.ctx!;
-    v.gain.disconnect(); // Direktverbindung zum Master lösen (nur beim nachträglichen Einbau relevant)
     const filter = (type: BiquadFilterType, freq: number, db: number, q: number) => {
       const f = ctx.createBiquadFilter();
       f.type = type; f.frequency.value = freq; f.Q.value = q; f.gain.value = db;
@@ -169,11 +224,12 @@ export class AudioEngine {
     const high = filter("highshelf", EQ_FREQS.high, fx.high, 0.7);
     const dry = ctx.createGain(), send = ctx.createGain();
     send.gain.value = fx.reverb;
-    v.gain.connect(low); low.connect(mid); mid.connect(high); high.connect(dry); dry.connect(this.master!);
+    low.connect(mid); mid.connect(high); high.connect(dry); dry.connect(this.master!);
     high.connect(send);
     const chain: Chain = { low, mid, high, dry, send, size: fx.size, connected: false };
     if (fx.reverb > 0) { send.connect(this.bus(fx.size).conv); chain.connected = true; } // Hall-Bus nur bei Bedarf
     v.chain = chain;
+    this.route(v);
   }
   private applyFx(v: Voice, fx: Fx): void {
     const c = v.chain!, t = this.ctx!.currentTime;
@@ -220,6 +276,8 @@ export class AudioEngine {
       setTimeout(() => { try { b.conv.disconnect(); b.out.disconnect(); } catch { /* egal */ } }, 250);
     }
     this.buses.clear();
+    for (const f of this.tails) f.dispose(); // auch ausklingendes Echo sofort beenden
+    this.tails.clear();
     this.emit();
   }
 

@@ -3,6 +3,7 @@ import { contentHash, uuid } from "../model/ids";
 import type { Note } from "../model/notes";
 import type { Group, PlayMode } from "../model/playRules";
 import type { ReverbSize } from "../model/fx";
+import { parseGlobalEffects, type EffectProfile, type EffectsSettings, type FxMode } from "../model/effects";
 
 export interface StoredSound { id: string; name: string; hash: string; size: number; blob: Blob; duration?: number }
 export interface PadConfig {
@@ -13,19 +14,22 @@ export interface PadConfig {
   note?: string; // persönliche Notiz zum Pad (an die Pad-ID gebunden)
   fadeIn?: number; fadeOut?: number; // Ein-/Ausblendzeit in Sekunden (leer = aus)
   eqLow?: number; eqMid?: number; eqHigh?: number; reverb?: number; reverbSize?: ReverbSize; // EQ in dB, Hall 0 bis 1 (leer = aus)
+  fxMode?: FxMode; fxOwn?: EffectProfile; // Soundeffekte & Filter: Modus und eigene Einstellungen
 }
 export interface StoredBank { id: string; name: string; columns: number; padCount: number; order: number }
 export interface StoredNote extends Note { order: number }
 export interface StoredGroup extends Group { order: number }
+export interface StoredEffects extends EffectsSettings { id: string }
 interface SamplerDB extends DBSchema {
   notes: { key: string; value: StoredNote };
   groups: { key: string; value: StoredGroup };
+  settings: { key: string; value: StoredEffects };
   banks: { key: string; value: StoredBank };
   sounds: { key: string; value: StoredSound; indexes: { hash: string } };
   pads: { key: string; value: PadConfig };
 }
 
-const dbPromise = openDB<SamplerDB>("sampler", 4, {
+const dbPromise = openDB<SamplerDB>("sampler", 5, {
   upgrade(db, oldVersion) {
     if (oldVersion < 1) {
       db.createObjectStore("sounds", { keyPath: "id" }).createIndex("hash", "hash");
@@ -34,6 +38,7 @@ const dbPromise = openDB<SamplerDB>("sampler", 4, {
     if (oldVersion < 2) db.createObjectStore("banks", { keyPath: "id" });
     if (oldVersion < 3) db.createObjectStore("notes", { keyPath: "id" });
     if (oldVersion < 4) db.createObjectStore("groups", { keyPath: "id" });
+    if (oldVersion < 5) db.createObjectStore("settings", { keyPath: "id" });
   },
 });
 
@@ -55,18 +60,19 @@ export async function loadPads(): Promise<PadConfig[]> { return (await dbPromise
 export async function loadAllSounds(): Promise<StoredSound[]> { return (await dbPromise).getAll("sounds"); }
 /** Ersetzt das gesamte Projekt in EINER Transaktion: entweder alles oder (bei Fehler) nichts. */
 export async function replaceAllData(d: {
-  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[]; notes: Note[]; groups: Group[];
+  banks: Omit<StoredBank, "order">[]; pads: PadConfig[]; sounds: StoredSound[]; notes: Note[]; groups: Group[]; effects: EffectsSettings;
 }): Promise<void> {
   const db = await dbPromise;
-  const tx = db.transaction(["banks", "pads", "sounds", "notes", "groups"], "readwrite");
+  const tx = db.transaction(["banks", "pads", "sounds", "notes", "groups", "settings"], "readwrite");
   const jobs: Promise<unknown>[] = [
-    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(), tx.objectStore("notes").clear(), tx.objectStore("groups").clear(),
+    tx.objectStore("banks").clear(), tx.objectStore("pads").clear(), tx.objectStore("sounds").clear(), tx.objectStore("notes").clear(), tx.objectStore("groups").clear(), tx.objectStore("settings").clear(),
   ];
   d.banks.forEach((b, order) => jobs.push(tx.objectStore("banks").put({ ...b, order })));
   d.pads.forEach((p) => jobs.push(tx.objectStore("pads").put(p)));
   d.sounds.forEach((s) => jobs.push(tx.objectStore("sounds").put(s)));
   d.notes.forEach((n, order) => jobs.push(tx.objectStore("notes").put({ ...n, order })));
   d.groups.forEach((g, order) => jobs.push(tx.objectStore("groups").put({ ...g, order })));
+  jobs.push(tx.objectStore("settings").put({ id: "effects", enabled: d.effects.enabled, profile: d.effects.profile }));
   await Promise.all([...jobs, tx.done]);
 }
 export type SoundInfo = Omit<StoredSound, "blob">;
@@ -107,6 +113,14 @@ export async function loadGroups(): Promise<Group[]> {
 export async function saveGroups(groups: Group[]): Promise<void> {
   const tx = (await dbPromise).transaction("groups", "readwrite");
   await Promise.all([tx.store.clear(), ...groups.map((g, order) => tx.store.put({ ...g, order })), tx.done]);
+}
+/** Globale Soundeffekte. Gespeicherte Werte werden geprüft, Ungültiges ergibt "nicht vorhanden". */
+export async function loadEffects(): Promise<EffectsSettings | undefined> {
+  const r = await (await dbPromise).get("settings", "effects");
+  return r ? parseGlobalEffects(r) ?? undefined : undefined;
+}
+export async function saveEffects(e: EffectsSettings): Promise<void> {
+  await (await dbPromise).put("settings", { id: "effects", enabled: e.enabled, profile: e.profile });
 }
 export async function deletePad(id: string): Promise<void> { await (await dbPromise).delete("pads", id); }
 export async function loadBanks(): Promise<StoredBank[]> {

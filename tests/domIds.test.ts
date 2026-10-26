@@ -9,6 +9,7 @@ describe("Oberfläche: Element-Namen", () => {
     const ids = new Set<string>();
     for (const m of main.matchAll(/\$(?:<[^>(]*>)?\("([A-Za-z0-9_-]+)"\)/g)) ids.add(m[1]);
     for (const m of main.matchAll(/"(f[A-Z][A-Za-z]+)"/g)) ids.add(m[1]); // Pad-Dialog-Felder, auch aus Listen
+    for (const m of main.matchAll(/"(fx[A-Z][A-Za-z0-9]*)"/g)) ids.add(m[1]); // Soundeffekte (auch als Parameter übergeben)
     const missing = [...ids].filter((id) => !html.includes(`id="${id}"`));
     expect(missing).toEqual([]);
   });

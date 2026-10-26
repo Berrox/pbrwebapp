@@ -49,3 +49,9 @@ Bänke: optionales Feld `color` (`#rrggbb`). Die App schreibt `"version": 7`; Ve
 
 ## Nachtrag (EQ und Hall, Version 8)
 Pads: optionale Felder `eqLow`, `eqMid`, `eqHigh` (−12 bis 12 dB), `reverb` (0 bis 1), `reverbSize` (`room`|`hall`|`church`). Die App schreibt `"version": 8`; Version 1 bis 7 werden weiter gelesen. Details: `docs/KLANG.md`.
+
+## Nachtrag (Soundeffekte & Filter, Version 9)
+Projekt: `effects` (`enabled`, `profile` mit `tape` und `radio`, Werte 0 bis 100, Schalter, Preset-Name). Pads: `fxMode` (`off`|`global`|`own`), `fxOwn` (Profil). Fehlt etwas, gilt „alles aus“. Die App schreibt `"version": 9`; Version 1 bis 8 werden weiter gelesen. Details: `docs/EFFEKTE.md`.
+
+## Nachtrag (weitere Effekte, Version 10)
+`effects.profile` und `fxOwn` können zusätzlich `vinyl`, `filter`, `distortion`, `chorus`, `lofi`, `echo` enthalten, das Tape optional `clicks`. Fehlt etwas, gilt „aus“ beziehungsweise 0. Die App schreibt `"version": 10`; Version 1 bis 9 werden weiter gelesen. Details: `docs/EFFEKTE.md`.
